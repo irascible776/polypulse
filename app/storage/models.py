@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    ForeignKey,
     Identity,
     Index,
     Integer,
@@ -33,7 +34,7 @@ class TrackedWallet(Base):
 
     __tablename__ = "tracked_wallets"
 
-    address: Mapped[str] = mapped_column(String(42), primary_key=True, index=True)
+    address: Mapped[str] = mapped_column(String(42), primary_key=True, index=True, unique=True)
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tracking_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -58,13 +59,18 @@ class SourceEvent(Base):
         UniqueConstraint("wallet", "api_order", name="uq_source_events_wallet_order"),
         UniqueConstraint("wallet", "source_event_id", name="uq_source_events_wallet_event_id"),
         Index("ix_source_events_wallet_time_order", "wallet", "event_time", "api_order"),
+        Index("ix_source_events_wallet_dedup", "wallet", "dedup_key"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
     source: Mapped[str] = mapped_column(Text, nullable=False)
     source_event_id: Mapped[str] = mapped_column(Text, nullable=False)
     dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
-    superseded_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    superseded_by: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("source_events.id", name="fk_source_events_superseded_by"),
+        nullable=True,
+    )
     wallet: Mapped[str] = mapped_column(Text, nullable=False)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -355,14 +361,12 @@ class MarketPrice(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     condition_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    token_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    token_id: Mapped[str] = mapped_column(Text, nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     bid: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True, deferred=True)
     ask: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True, deferred=True)
     source: Mapped[str] = mapped_column(Text, nullable=False)
-    observed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     def __repr__(self) -> str:

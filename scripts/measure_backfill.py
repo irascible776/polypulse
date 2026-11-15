@@ -6,6 +6,7 @@ from sqlalchemy import text
 from app.ingestion.backfill import run_wallet_backfill
 from app.ingestion.data_api import DataApiSource
 from app.storage.database import async_session_factory
+from scripts.guard_test_database import main as guard_database
 
 WALLETS = [
     ("AppleTiiime", "0x951634357346bb291df117f9ac410100feea2104"),
@@ -14,6 +15,8 @@ WALLETS = [
 
 
 async def run_live_backfill():
+    if guard_database():
+        raise SystemExit(1)
     # 0. Clean slate for data_api source
     async with async_session_factory() as session:
         await session.execute(text("DELETE FROM source_events WHERE source = 'data_api'"))

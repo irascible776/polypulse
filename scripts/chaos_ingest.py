@@ -20,6 +20,7 @@ from app.ingestion.backfill import run_wallet_backfill
 from app.ingestion.fixture_replay import FixtureReplaySource
 from app.storage.database import async_session_factory, check_database_connection
 from app.storage.models import SourceEvent
+from scripts.guard_test_database import main as guard_database
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("chaos_ingest")
@@ -37,6 +38,8 @@ EXPECTED_TOTAL = 2454
 
 async def reset_wallet_data(wallet: str) -> None:
     """Clear existing events and cursor for clean chaos trial."""
+    if guard_database():
+        raise SystemExit(1)
     async with async_session_factory() as session:
         from sqlalchemy import text
 
@@ -166,6 +169,8 @@ def run_single_chaos_trial(trial_num: int) -> dict[str, Any]:
 
 
 def main() -> None:
+    if guard_database():
+        raise SystemExit(1)
     is_connected = asyncio.run(check_database_connection())
     if not is_connected:
         logger.error(

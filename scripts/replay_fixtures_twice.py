@@ -8,6 +8,7 @@ from app.ingestion.identifiers import EventIdAssigner
 from app.ingestion.writer import write_event_batch
 from app.storage.database import async_session
 from app.storage.models import SourceEvent
+from scripts.guard_test_database import main as guard_database
 
 WALLETS = [
     ("AppleTiiime", "0x951634357346bb291df117f9ac410100feea2104"),
@@ -66,6 +67,8 @@ async def replay_pass(pass_number: int) -> dict[str, tuple[int, int]]:
 
 
 async def main():
+    if guard_database():
+        raise SystemExit(1)
     # 0. Clean slate for fixture_replay source
     async with async_session() as session:
         await session.execute(text("DELETE FROM source_events WHERE source = 'fixture_replay'"))

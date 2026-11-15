@@ -52,6 +52,19 @@ def test_unenriched_and_two_enriched_leave_two_live():
     assert pair_enrichment([row(1, False), row(2, True), row(3, True)]) == {1: 2}
 
 
+@pytest.mark.parametrize(
+    "value",
+    [0, "", None, "1.50", "1.5E+2", "0.000001", 100, "123456789012345678901234567890.123456789"],
+)
+def test_frozen_migration_normalization_matches_runtime(value):
+    import importlib
+
+    from app.ingestion.identifiers import normalize_decimal_str
+
+    migration = importlib.import_module("app.storage.migrations.versions.0013_source_event_dedup")
+    assert migration._normalize(value) == normalize_decimal_str(value)
+
+
 @pytest.mark.asyncio
 async def test_projected_trade_is_recomputed_after_enrichment():
     import uuid
@@ -161,4 +174,93 @@ async def test_legacy_double_projected_pair_drops_one_fill():
             )
             == 1
         )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_legacy_duplicate_then_sell_recompute_pnl():
+    import uuid
+    from datetime import datetime, timezone
+    from decimal import Decimal, localcontext
+
+    from sqlalchemy import select
+
+    from app.accounting.projector import AccountingProjector
+    from app.ingestion.writer import prepare_source_event_record, supersede_trade_pairs
+    from app.storage.database import async_session_factory
+    from app.storage.models import Position, PositionLedger, SourceEvent, WalletTotal
+
+    wallet = f"pnl-dedup-{uuid.uuid4()}"
+    buy = {
+        "type": "TRADE",
+        "side": "BUY",
+        "timestamp": 1700000000,
+        "size": "10",
+        "usdc_size": "4",
+        "condition_id": "c",
+        "token_id": "t",
+        "transaction_hash": "b",
+        "outcome_index": 999,
+        "event_slug": "",
+    }
+    sell = {
+        **buy,
+        "side": "SELL",
+        "timestamp": 1700000001,
+        "size": "5",
+        "usdc_size": "3",
+        "transaction_hash": "s",
+        "outcome_index": 0,
+        "event_slug": "market",
+    }
+    async with async_session_factory() as session:
+        key = dedup_key({**buy, "wallet": wallet})
+        for order, raw in enumerate(
+            (buy, dict(buy, outcome_index=0, event_slug="market"), sell), 1
+        ):
+            record = prepare_source_event_record(
+                raw, f"event-{order}", wallet, "fixture", order, False, datetime.now(timezone.utc)
+            )
+            session.add(SourceEvent(**record, dedup_key=dedup_key(record)))
+        await session.flush()
+        projector = AccountingProjector()
+        await projector.catch_up_wallet(session, wallet)
+        total = await session.get(WalletTotal, wallet)
+        before_pnl = total.total_realized_pnl
+        before = dict(
+            (
+                await session.execute(
+                    select(PositionLedger.source_event_id, PositionLedger.realized_pnl_delta).where(
+                        PositionLedger.wallet == wallet
+                    )
+                )
+            ).all()
+        )
+        await supersede_trade_pairs(session, wallet, key)
+        await projector.catch_up_wallet(session, wallet)
+        position = await session.get(Position, (wallet, "c", "t"), populate_existing=True)
+        total = await session.get(WalletTotal, wallet, populate_existing=True)
+        after = dict(
+            (
+                await session.execute(
+                    select(PositionLedger.source_event_id, PositionLedger.realized_pnl_delta).where(
+                        PositionLedger.wallet == wallet
+                    )
+                )
+            ).all()
+        )
+        with localcontext() as ctx:
+            ctx.prec = 28
+            cost = Decimal("4") / Decimal("10")
+            assert position.shares == Decimal("10") - Decimal("5")
+            assert position.avg_cost_basis == cost
+            assert total.total_realized_pnl == Decimal("3") - Decimal("5") * cost
+            change = sum(
+                (
+                    after.get(i, Decimal(0)) - before.get(i, Decimal(0))
+                    for i in before.keys() | after.keys()
+                ),
+                Decimal(0),
+            )
+            assert abs(total.total_realized_pnl - before_pnl - change) <= Decimal("1e-12")
         await session.rollback()
