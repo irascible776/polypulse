@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolyPulse Terminal | Gravia.trade Real-Time Portfolio</title>
+  <style>
+    :root {
+      --bg-dark: #0a0d13;
+      --bg-card: #111620;
+      --bg-card-hover: #161d2a;
+      --border-color: #212c3d;
+      --text-main: #e6edf3;
+      --text-muted: #7d8590;
+      --accent-cyan: #00f0ff;
+      --accent-green: #00ff88;
+      --accent-amber: #ffb800;
+      --accent-red: #ff3366;
+      --font-mono: 'JetBrains Mono', 'Fira Code', 'Roboto Mono', Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 16px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand h1 {
+      font-size: 18px;
+      letter-spacing: 1px;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+    }
+    .status-pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
+      background: #00ff8815;
+      color: var(--accent-green);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .wallet-selector {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .wallet-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 6px 12px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.15s ease;
+    }
+    .wallet-btn:hover { background: var(--bg-card-hover); color: var(--text-main); }
+    .wallet-btn.active {
+      background: #00f0ff1a;
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+    .wallet-input {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 6px 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      border-radius: 4px;
+      width: 280px;
+    }
+
+    .grid-top {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .kpi-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 14px;
+    }
+    .kpi-title {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .kpi-value {
+      font-size: 20px;
+      font-weight: bold;
+    }
+    .kpi-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .val-green { color: var(--accent-green); }
+    .val-red { color: var(--accent-red); }
+    .val-cyan { color: var(--accent-cyan); }
+    .val-amber { color: var(--accent-amber); }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      height: 620px;
+    }
+    .panel-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #0d1219;
+    }
+    .panel-title {
+      font-size: 13px;
+      font-weight: bold;
+      color: var(--text-main);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: #0d1219;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      padding: 10px 12px;
+      font-weight: normal;
+      z-index: 2;
+    }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #161f2e;
+      font-size: 12px;
+    }
+    tr:hover td { background: var(--bg-card-hover); }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+    .badge-live { background: #00ff8820; color: var(--accent-green); border: 1px solid #00ff8840; }
+    .badge-trade { background: #00f0ff20; color: var(--accent-cyan); border: 1px solid #00f0ff40; }
+    .badge-resolved { background: #9d4edd20; color: #c77dff; border: 1px solid #9d4edd40; }
+    .badge-stale { background: #ffb80020; color: var(--accent-amber); border: 1px solid #ffb80040; }
+    .badge-unavail { background: #ff336620; color: var(--accent-red); border: 1px solid #ff336640; }
+
+    .feed-item {
+      padding: 8px 12px;
+      border-bottom: 1px solid #161f2e;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      font-size: 11px;
+    }
+    .feed-header {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+    }
+    .feed-body {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 500;
+    }
+
+    .chart-container {
+      padding: 16px;
+      height: 180px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+    }
+    canvas { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <h1>PolyPulse // Terminal</h1>
+      <span class="status-pill" id="connPill"><span class="dot"></span><span id="connText">CONNECTING...</span></span>
+    </div>
+
+    <div class="wallet-selector">
+      <button class="wallet-btn active" onclick="switchWallet('0x951634357346bb291df117f9ac410100feea2104', this)">AppleTiiime</button>
+      <button class="wallet-btn" onclick="switchWallet('0xa98a9d23e7211c22d2259b68b1bc9d47b3013b92', this)">JnStPrdctns</button>
+      <input type="text" id="customWallet" class="wallet-input" placeholder="0x... custom address" onkeydown="if(event.key==='Enter') switchWallet(this.value)">
+    </div>
+  </header>
+
+  <div id="staleBanner" style="display:none; color:var(--accent-red)"></div>
+  <div id="freshnessLine"></div><div id="reconcileLine"></div>
+  <div class="grid-top">
+    <div class="kpi-card">
+      <div class="kpi-title">Economic PnL (realized + live + estimated) <span id="asOfTag">LIVE</span></div>
+      <div class="kpi-value val-green" id="kpiTotalPnL">—</div>
+      <div class="kpi-sub" id="kpiParts"></div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-title">Realized PnL</div>
+      <div class="kpi-value val-cyan" id="kpiRealizedPnL">—</div>
+      <div class="kpi-sub">FIFO Settled USDC</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-title">Unrealized PnL (priced only)</div>
+      <div class="kpi-value val-green" id="kpiUnrealizedPnL">—</div>
+      <div class="kpi-sub" id="kpiStaleCount">—</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-title">Active Market Exposure</div>
+      <div class="kpi-value" id="kpiMarketValue">—</div>
+      <div class="kpi-sub" id="kpiPositionCount">—</div>
+    </div>
+  </div>
+
+  <div class="main-grid">
+    <!-- Left: Positions Table -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Mark-To-Market Active Positions</span>
+        <span style="color: var(--text-muted); font-size: 11px;">Ranked by Position Size</span>
+      </div>
+      <div class="panel-body">
+        <table id="positionsTable">
+          <thead>
+            <tr>
+              <th>Token ID</th>
+              <th>Shares</th>
+              <th>Avg Cost</th>
+              <th>Mark Price</th>
+              <th>Market Value</th>
+              <th>Unrealized PnL</th>
+              <th>Pricing Tier</th>
+            </tr>
+          </thead>
+          <tbody id="positionsBody">
+            <tr><td colspan="7" style="text-align:center; color: var(--text-muted); padding: 40px;">Loading positions...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Right: Live Trade & Event Stream -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Live Trade & Ingestion Feed</span>
+        <span class="status-pill" id="feedPill"><span class="dot"></span>WS STREAM</span>
+      </div>
+      <div class="panel-body" id="feedBody">
+        <!-- Live feed events append here -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentWallet = "0x951634357346bb291df117f9ac410100feea2104";
+    let ws = null;
+    let socketOk = false;
+    let restOk = false;
+
+    function updateConnection() {
+      const connected = socketOk && restOk;
+      document.getElementById('connText').innerText = connected ? 'LIVE STREAMING' : 'API UNREACHABLE';
+      document.getElementById('connPill').style.borderColor = connected ? 'var(--accent-green)' : 'var(--accent-red)';
+      document.getElementById('feedPill').innerText = connected ? 'WS STREAM' : 'API UNREACHABLE';
+      if (!connected) {
+        for (const id of ['kpiTotalPnL', 'kpiRealizedPnL', 'kpiUnrealizedPnL', 'kpiMarketValue',
+                          'kpiStaleCount', 'kpiPositionCount', 'kpiParts', 'freshnessLine', 'reconcileLine']) {
+          document.getElementById(id).innerText = '—';
+        }
+        document.getElementById('positionsBody').innerHTML = '<tr><td colspan="7">API unreachable —</td></tr>';
+        document.getElementById('feedBody').innerHTML = 'API unreachable —';
+        document.getElementById('staleBanner').style.display = 'none';
+      }
+    }
+
+    function formatUSD(val) {
+      const num = Number(val) || 0;
+      const sign = num < 0 ? "-" : "";
+      return sign + "$" + Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatNumber(val, decimals = 2) {
+      return (Number(val) || 0).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+
+    function getBadge(tier, staleness, isStale) {
+      if (tier === 'last_trade') return `<span class="badge badge-stale">LAST TRADE, TIME UNKNOWN</span>`;
+      if (isStale) return `<span class="badge badge-stale">STALE (${staleness}s)</span>`;
+      if (tier === 'live_quote') return `<span class="badge badge-live">CLOB MID</span>`;
+      if (tier === 'last_trade') return `<span class="badge badge-trade">LAST TRADE</span>`;
+      if (tier === 'resolved') return `<span class="badge badge-resolved">RESOLVED - ESTIMATED</span>`;
+      return `<span class="badge badge-unavail">UNPRICED</span>`;
+    }
+
+    async function loadWalletData(wallet) {
+      try {
+        const read = async url => { const response = await fetch(url); if (!response.ok) throw Error(response.status); return response.json(); };
+        const [pnlRes, posRes, tradeRes, health] = await Promise.all([
+          read(`/wallets/${wallet}/pnl`),
+          read(`/wallets/${wallet}/positions`),
+          read(`/wallets/${wallet}/trades?limit=25`),
+          read('/health')
+        ]);
+        restOk = true;
+        updateConnection();
+        if (!socketOk) return;
+
+        // 1. Render KPIs
+        document.getElementById('kpiTotalPnL').innerText = pnlRes.complete ? formatUSD(pnlRes.total_pnl_excl_unpriced) : 'Incomplete — no total';
+        document.getElementById('kpiParts').innerText = `Realized ${formatUSD(pnlRes.realized_pnl)} · Live ${formatUSD(pnlRes.unrealized_priced)} · ESTIMATED ${formatUSD(pnlRes.estimated_unrealized)} · Complete: ${pnlRes.complete}`;
+        const valuationReasons = [
+          pnlRes.ingestion_stale && 'ingestion',
+          pnlRes.resolution_stale && 'resolution',
+          !pnlRes.complete && 'unpriced'
+        ].filter(Boolean);
+        document.getElementById('staleBanner').innerText = valuationReasons.length ? `VALUATION NOT CURRENT: ${valuationReasons.join(', ')}` : '';
+        document.getElementById('staleBanner').style.display = pnlRes.valuation_current ? 'none' : 'block';
+        document.getElementById('freshnessLine').innerText = `Data as of: ${pnlRes.data_as_of || 'unknown'} · Age: ${pnlRes.ingestion_lag_seconds === null ? 'unknown' : Math.floor(pnlRes.ingestion_lag_seconds) + 's'}`;
+        const reconciliation = health.wallets?.[wallet]?.reconcile;
+        document.getElementById('reconcileLine').innerText = reconciliation ? `Reconciliation: ${reconciliation.match_count} match / ${reconciliation.in_flight_count} in flight / ${reconciliation.mismatch_count} mismatch / ${reconciliation.unknown_count} unknown` : 'Reconciliation: unavailable';
+        document.getElementById('kpiTotalPnL').className = "kpi-value " + (Number(pnlRes.total_pnl_excl_unpriced) >= 0 ? "val-green" : "val-red");
+
+        document.getElementById('kpiRealizedPnL').innerText = formatUSD(pnlRes.realized_pnl);
+        document.getElementById('kpiRealizedPnL').className = "kpi-value " + (pnlRes.realized_pnl >= 0 ? "val-cyan" : "val-red");
+
+        document.getElementById('kpiUnrealizedPnL').innerText = formatUSD(pnlRes.unrealized_priced) + " + " + formatUSD(pnlRes.estimated_unrealized) + " estimated";
+        document.getElementById('kpiUnrealizedPnL').className = "kpi-value " + (Number(pnlRes.unrealized_priced) >= 0 ? "val-green" : "val-red");
+        document.getElementById('kpiStaleCount').innerText = `${pnlRes.stale_positions_count} stale · ${pnlRes.unpriced_count} unpriced · cost ${formatUSD(pnlRes.unpriced_cost_basis)}`;
+
+        document.getElementById('kpiMarketValue').innerText = formatUSD(pnlRes.total_market_value);
+        document.getElementById('kpiPositionCount').innerText = `${pnlRes.open_positions_count} Open Positions`;
+
+        // 2. Render Positions Table
+        const tbody = document.getElementById('positionsBody');
+        tbody.innerHTML = '';
+        if (posRes.positions.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color: var(--text-muted); padding: 40px;">No open positions held.</td></tr>';
+        } else {
+          for (const p of posRes.positions) {
+            const tr = document.createElement('tr');
+            const pnlClass = p.unrealized_pnl >= 0 ? "val-green" : "val-red";
+            tr.innerHTML = `
+              <td><span title="${p.token_id}">${p.token_id.slice(0, 10)}...${p.token_id.slice(-6)}</span></td>
+              <td>${formatNumber(p.shares, 2)}</td>
+              <td>$${formatNumber(p.avg_cost_basis, 4)}</td>
+              <td>${p.mark_price === null ? '—' : '$' + formatNumber(p.mark_price, 4)}</td>
+              <td>${p.market_value === null ? '—' : formatUSD(p.market_value)}</td>
+              <td class="${pnlClass}">${p.unrealized_pnl === null ? '—' : formatUSD(p.unrealized_pnl)}</td>
+              <td>${getBadge(p.price_source, p.staleness_seconds, p.is_stale)}</td>
+            `;
+            tbody.appendChild(tr);
+          }
+        }
+
+        // 3. Render Initial Trades Feed
+        const feed = document.getElementById('feedBody');
+        feed.innerHTML = '';
+        for (const t of tradeRes.trades) {
+          addFeedItem({
+            type: t.event_type,
+            title: `${t.event_type} ${formatNumber(Math.abs(t.shares_delta))} shares`,
+            sub: `$${formatNumber(Math.abs(t.cash_delta))} USDC | PnL: ${formatUSD(t.realized_pnl_delta)}`,
+            time: t.event_time.slice(11, 19)
+          });
+        }
+      } catch (err) {
+        restOk = false;
+        updateConnection();
+        console.error("Failed to load wallet data:", err);
+      }
+    }
+
+    function addFeedItem(item) {
+      const feed = document.getElementById('feedBody');
+      const div = document.createElement('div');
+      div.className = 'feed-item';
+      div.innerHTML = `
+        <div class="feed-header">
+          <span>${item.type}</span>
+          <span>${item.time}</span>
+        </div>
+        <div class="feed-body">
+          <span>${item.title}</span>
+          <span style="color: ${item.sub.includes('-') ? 'var(--accent-red)' : 'var(--accent-green)'}">${item.sub}</span>
+        </div>
+      `;
+      feed.prepend(div);
+      if (feed.children.length > 50) feed.removeChild(feed.lastChild);
+    }
+
+    function connectWS(wallet) {
+      if (ws) ws.close();
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${window.location.host}/ws/wallets/${wallet}`;
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        socketOk = true;
+        updateConnection();
+        loadWalletData(wallet);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'snapshot' || msg.type === 'pnl_update' || msg.type === 'trade' || msg.type === 'price_update') {
+            loadWalletData(currentWallet);
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => {
+        socketOk = false;
+        updateConnection();
+        setTimeout(() => connectWS(currentWallet), 3000);
+      };
+      ws.onerror = () => { socketOk = false; updateConnection(); };
+    }
+
+    function switchWallet(wallet, btn) {
+      if (!wallet || !wallet.startsWith('0x')) return;
+      currentWallet = wallet.toLowerCase();
+      document.querySelectorAll('.wallet-btn').forEach(b => b.classList.remove('active'));
+      if (btn) btn.classList.add('active');
+      loadWalletData(currentWallet);
+      connectWS(currentWallet);
+    }
+
+    // Auto-init
+    loadWalletData(currentWallet);
+    connectWS(currentWallet);
+    setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send("ping"); }, 15000);
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,11 @@
+wallets:
+  - address: "0x951634357346bb291df117f9ac410100feea2104"
+    label: "AppleTiiime"
+    tracking_start: "2026-11-12T00:00:00Z"
+  - address: "0xa98a9d23e7211c22d2259b68b1bc9d47b3013b92"
+    label: "JnStPrdctns"
+    tracking_start: "2026-11-12T00:00:00Z"
+  - address: "0x0000000000000000000000000000000000000001"
+    label: "SyntheticFixtureWallet"
+    tracking_start: "2026-11-12T00:00:00Z"
+

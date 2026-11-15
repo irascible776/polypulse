@@ -1,0 +1,56 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+backups/
+*.dump
+*.sql.gz
+reports/
+!reports/5e_progress.md
+WhatsApp Unknown 2026-11-11 at 20.10.07/
+*.pdf
+
+# Testing & Linting
+.pytest_cache/
+.ruff_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Local database data volume
+postgres_data/
+
+# OS artifacts
+.DS_Store
+
+# Bulk raw fixtures (>22 MB total third-party data, regenerate via scripts/fetch_fixtures.py)
+fixtures/appletiiime_page_*.json
+fixtures/activity_*.json
+fixtures/boggs_page_*.json
+fixtures/ethanaz_page_*.json
+fixtures/greedo_page_*.json
+fixtures/homeless_page_*.json
+fixtures/jnstprdctns_page_*.json
+fixtures/justwins_*.json
+fixtures/leaderboard_*.json
+fixtures/leaderboard_*.txt
+fixtures/plusti_page_*.json
+fixtures/sample_1465_*.json
+fixtures/sample_wallet_*.json
+fixtures/test_asc.json
+fixtures/top_volume_all.json
+fixtures/trades_0x*.json
+fixtures/market_ws_raw.jsonl
+fixtures/builders_sample.json
