@@ -469,6 +469,7 @@ class Worker:
             log_event("poll_cycle_error", error=f"{type(exc).__name__}: {exc}")
 
     async def reconcile_cycle(self) -> None:
+        logger.info("loop_d_start timestamp=%s", datetime.now(timezone.utc).isoformat())
         stats = self.stats["D"]
         stats["cycles"] += 1
         client = PolygonRpcClient(endpoints=["https://polygon.drpc.org/"], max_retries=1)
@@ -531,6 +532,7 @@ class Worker:
                             error=error,
                         )
                     )
+        logger.info("loop_d_complete timestamp=%s", datetime.now(timezone.utc).isoformat())
 
 
 async def run_worker(
