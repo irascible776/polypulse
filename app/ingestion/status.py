@@ -83,6 +83,12 @@ async def get_wallet_ingestion_status(
         if ev_type not in KNOWN_EVENT_TYPES:
             unsupported_type_count += count
 
+    superseded_count = await session.scalar(
+        select(func.count())
+        .select_from(SourceEvent)
+        .where(SourceEvent.wallet == w, SourceEvent.superseded_by.is_not(None))
+    )
+
     # 3. Detection lag percentiles over the last 1,000 events
     p50 = lag_p50_override
     p95 = lag_p95_override
@@ -117,6 +123,7 @@ async def get_wallet_ingestion_status(
         "last_success_at": last_success_at,
         **ingestion_freshness(cursor.last_success_at if cursor else None),
         "events_stored": total_events,
+        "superseded_count": superseded_count,
         "counts_per_event_type": counts_per_event_type,
         "unsupported_type_count": unsupported_type_count,
         "consecutive_failures": consecutive_failures,

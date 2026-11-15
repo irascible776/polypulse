@@ -115,7 +115,7 @@ async def test_projected_trade_is_recomputed_after_enrichment():
 
 
 @pytest.mark.asyncio
-async def test_legacy_double_projected_pair_drops_one_fill():
+async def test_legacy_double_projected_pair_drops_one_fill(caplog):
     import uuid
     from datetime import datetime, timezone
     from decimal import Decimal
@@ -123,6 +123,7 @@ async def test_legacy_double_projected_pair_drops_one_fill():
     from sqlalchemy import func, select
 
     from app.accounting.projector import AccountingProjector
+    from app.ingestion.status import get_wallet_ingestion_status
     from app.ingestion.writer import prepare_source_event_record, supersede_trade_pairs
     from app.storage.database import async_session_factory
     from app.storage.models import Position, PositionLedger, SourceEvent
@@ -160,7 +161,13 @@ async def test_legacy_double_projected_pair_drops_one_fill():
             )
             == 2
         )
-        assert len(await supersede_trade_pairs(session, wallet, key)) == 1
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="ingestion_writer"):
+            assert len(await supersede_trade_pairs(session, wallet, key)) == 1
+        assert f'"wallet": "{wallet}"' in caplog.text
+        assert '"count": 1' in caplog.text
+        assert (await get_wallet_ingestion_status(session, wallet))["superseded_count"] == 1
         assert (await projector.catch_up_wallet(session, wallet)).is_recompute
         position = await session.get(
             Position, (wallet, "condition", "token"), populate_existing=True

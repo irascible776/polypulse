@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -63,6 +64,16 @@ async def supersede_trade_pairs(session: AsyncSession, wallet: str, key: str) ->
                 .values(recompute_needed=True)
             )
         await session.flush()
+        logger.info(
+            json.dumps(
+                {
+                    "event": "supersede",
+                    "wallet": wallet,
+                    "count": len(pairs),
+                    "transaction": "pending",
+                }
+            )
+        )
     return pairs
 
 
