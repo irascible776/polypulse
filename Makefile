@@ -1,4 +1,4 @@
-.PHONY: db-up run worker test bench lint migrate clean format
+.PHONY: db-up run worker soak test bench lint migrate clean format
 
 db-up:
 	docker compose up -d postgres
@@ -8,6 +8,9 @@ run:
 
 worker:
 	~/.local/bin/uv run python -m app.worker
+
+soak:
+	~/.local/bin/uv run python -m scripts.soak_worker --duration 900
 
 test:
 	~/.local/bin/uv run python -m scripts.guard_test_database
