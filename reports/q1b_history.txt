@@ -1,0 +1,34 @@
+.env.example | api_key | placeholder/config reference | MEASURED 3
+.env.example | password | placeholder/config reference | MEASURED 1
+.env.example | postgres-url-with-password | placeholder/config reference | MEASURED 3
+.env.example | secret | placeholder/config reference | MEASURED 2
+.gitignore | secret | placeholder/config reference | MEASURED 1
+AGENTS.md | api key | placeholder/config reference | MEASURED 1
+README.md | api_key | placeholder/config reference | MEASURED 3
+README.md | password | placeholder/config reference | MEASURED 1
+README.md | postgres-url-with-password | placeholder/config reference | MEASURED 4
+README.md | secret | placeholder/config reference | MEASURED 2
+app/config.py | api_key | placeholder/config reference | MEASURED 2
+app/config.py | postgres-url-with-password | placeholder/config reference | MEASURED 2
+app/main.py | api_key | placeholder/config reference | MEASURED 2
+app/serving/routes.py | api-key | placeholder/config reference | MEASURED 3
+app/serving/routes.py | api_key | placeholder/config reference | MEASURED 7
+app/serving/websocket.py | password | placeholder/config reference | MEASURED 1
+docker-compose.yml | password | placeholder/config reference | MEASURED 7
+docker-compose.yml | postgres-url-with-password | placeholder/config reference | MEASURED 2
+docs/PHASE_1_FOUNDATIONS.md | secret | placeholder/config reference | MEASURED 1
+docs/claude_phase_4_review_and_phase_5_spec.md | api key | placeholder/config reference | MEASURED 1
+docs/claude_phase_4_review_and_phase_5_spec.md | api-key | placeholder/config reference | MEASURED 1
+docs/claude_phase_4_review_and_phase_5_spec.md | api_key | placeholder/config reference | MEASURED 1
+docs/claude_phase_4_review_and_phase_5_spec.md | secret | placeholder/config reference | MEASURED 3
+docs/decisions/001-api-behavior.md | api key | placeholder/config reference | MEASURED 1
+docs/decisions/006-rpc-provider-and-onchain-model.md | api key | placeholder/config reference | MEASURED 1
+docs/prompts/final_signoff_prompt.md | api-key | placeholder/config reference | MEASURED 1
+docs/prompts/final_signoff_prompt.md | api_key | placeholder/config reference | MEASURED 1
+docs/study/01-foundations.md | private key | placeholder/config reference | MEASURED 1
+docs/study/01-foundations.md | secret | placeholder/config reference | MEASURED 1
+tests/test_api_serving.py | api key | test constant/reference | MEASURED 3
+tests/test_api_serving.py | api-key | test constant/reference | MEASURED 4
+tests/test_api_serving.py | api_key | test constant/reference | MEASURED 2
+tests/test_pricing_api_contract.py | api_key | test constant/reference | MEASURED 2
+MEASURED TOTAL 71
