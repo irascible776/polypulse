@@ -1,0 +1,6 @@
+GROUP 0x25c1cae5e37d36f8903d0cba6771421e67b75889f33a58353c230a9dfbd9d518 98698264443464749785742107658929915438492662265238782654487644537186874617787 net 0 position_shares 0.0 status_at_97375629 MATCH (all known tokens matched in reports/p3_real_reconcile.txt)
+ EVENT TransferBatch direction /out amount 0 block 96308438
+GROUP 0xc2bae7b2f97f2b1250c9cb44c30ed0f327d04a4291a0d4efc92ef4e1b3b58fa3 49138392451111815013714706337167635221606628002963632534668801900490430735444 net 0 position_shares 0 status_at_97375629 MATCH (all known tokens matched in reports/p3_real_reconcile.txt)
+ EVENT TransferBatch direction /out amount 0 block 96996131
+GROUP 0xfd7c78a68b531207a4bdee0c87aa08d4783d95f2db1a97407e14d9c30c8732c9 86749146041731911949727545232008465109871317888680207700443593425869480832015 net 0 position_shares 0.0 status_at_97375629 MATCH (all known tokens matched in reports/p3_real_reconcile.txt)
+ EVENT TransferBatch direction /out amount 0 block 96131792
