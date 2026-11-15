@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -52,14 +52,34 @@ POLYMARKET_CONTRACTS = {
 ZERO_ADDRESS = "0x" + "0" * 40
 
 
-def classify_delta(delta: Decimal, post_poll_net: Decimal, unknown_block: bool) -> str:
+def classify_delta(
+    delta: Decimal,
+    post_poll_net: Decimal,
+    unknown_block: bool,
+    post_reference: Decimal = Decimal(0),
+) -> str:
     if unknown_block:
         return "UNKNOWN"
     if delta == 0:
         return "MATCH"
-    if post_poll_net != 0 and delta == -post_poll_net:
+    if (post_poll_net != 0 and delta == -post_poll_net) or (
+        post_reference != 0 and delta == -post_reference
+    ):
         return "IN_FLIGHT"
     return "MISMATCH"
+
+
+def ledger_at_reference(entries, reference_time):
+    current, later = {}, {}
+    for entry in entries:
+        if entry.event_time <= reference_time:
+            bucket = current
+        elif entry.event_time <= reference_time + timedelta(seconds=120):
+            bucket = later
+        else:
+            continue
+        bucket[entry.token_id] = bucket.get(entry.token_id, Decimal(0)) + entry.shares_delta
+    return current, later
 
 
 def print_ingestion_freshness(last_success: datetime | None, reference_time: datetime) -> None:
@@ -113,28 +133,8 @@ async def reconcile_wallet(
     query_failures = 0
     positions_by_token = {p.token_id: p for p in positions}
     tokens = set(positions_by_token) | {e.token_id for e in chain if e.token_id}
-    blocks_by_tx = {e.transaction_hash.lower(): e.block_number for e in chain}
-    for tx in sorted({tx.lower() for _, tx in ledger if tx and tx.lower() not in blocks_by_tx}):
-        try:
-            blocks_by_tx[tx] = await cache_receipt(client, wallet, tx)
-        except Exception as exc:
-            logger.warning("Receipt unavailable for %s: %s: %s", tx, type(exc).__name__, exc)
-    async with async_session_factory() as session:
-        chain = (
-            (await session.execute(select(ChainEvent).where(ChainEvent.wallet == wallet)))
-            .scalars()
-            .all()
-        )
-    tokens.update(e.token_id for e in chain if e.token_id)
-    ledger_by_token = {}
-    in_flight = {}
+    ledger_by_token, in_flight = ledger_at_reference([entry for entry, _ in ledger], reference_time)
     unknown = {}
-    for entry, tx in ledger:
-        block = blocks_by_tx.get(tx.lower())
-        bucket = (
-            unknown if block is None else in_flight if block > reference_block else ledger_by_token
-        )
-        bucket[entry.token_id] = bucket.get(entry.token_id, Decimal("0")) + entry.shares_delta
     net = {}
     post_poll = {}
     for event in chain:
@@ -196,7 +196,10 @@ async def reconcile_wallet(
             off_chain = ledger_by_token.get(token_id, Decimal("0"))
             delta = off_chain - on_chain_shares
             status = classify_delta(
-                delta, post_poll.get(token_id, Decimal("0")), token_id in unknown
+                delta,
+                post_poll.get(token_id, Decimal("0")),
+                token_id in unknown,
+                in_flight.get(token_id, Decimal("0")),
             )
             is_match = status == "MATCH"
             if status == "MATCH":
