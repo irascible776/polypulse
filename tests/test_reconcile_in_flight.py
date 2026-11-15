@@ -1,9 +1,8 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
-
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 from app.chain.reconcile import classify_delta, ledger_at_reference
 
