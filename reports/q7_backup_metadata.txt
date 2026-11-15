@@ -1,0 +1,1 @@
+MEASURED backup backups/polypulse_q7_20261116_012038.dump bytes 2428336 sha256 a26accd40561d91c137f59cf4d702f5004005c6f8e216f922fe51eb2c0cf1616
