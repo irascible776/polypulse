@@ -29,9 +29,9 @@ Install Python and `uv`, then from a clean checkout:
 
 ```bash
 uv sync
+cp .env.example .env
+# Set POSTGRES_PASSWORD, DATABASE_URL and POLYPULSE_API_KEY in .env.
 make db-up
-export POLYPULSE_API_KEY='replace-with-a-local-secret'
-export DATABASE_URL='postgresql+psycopg://postgres:postgres@localhost:5432/polypulse'
 make migrate
 make run
 ```
@@ -59,7 +59,8 @@ using local PostgreSQL client tools and the configured credentials:
 createdb -h localhost -U postgres polypulse_scratch
 pg_dump -h localhost -U postgres -Fc -f /tmp/polypulse-scratch.dump polypulse
 pg_restore -h localhost -U postgres --no-owner --no-acl -d polypulse_scratch /tmp/polypulse-scratch.dump
-DATABASE_URL='postgresql+psycopg://postgres:postgres@localhost:5432/polypulse_scratch' make test
+set -a; . ./.env; set +a
+DATABASE_URL="${DATABASE_URL%/*}/polypulse_scratch" make test
 make lint
 make bench
 ```

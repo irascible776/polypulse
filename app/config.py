@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Database configuration (PostgreSQL 16 with psycopg 3 async driver)
-    database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/polypulse"
+    database_url: str
 
     # Application settings
     app_host: str = "0.0.0.0"
