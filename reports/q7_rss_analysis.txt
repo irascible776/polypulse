@@ -1,0 +1,20 @@
+MEASURED sample_count 181 start (datetime.datetime(2026, 11, 15, 19, 51, 28, 829287, tzinfo=datetime.timezone.utc), 0.0, 376) min_kb 376 max_kb 130228 end (datetime.datetime(2026, 11, 15, 20, 21, 29, 47341, tzinfo=datetime.timezone.utc), 1800.22, 129800)
+MEASURED D 1 start 2026-11-15T19:51:29.912198+00:00 complete 2026-11-15T19:51:35.335402+00:00 before (datetime.datetime(2026, 11, 15, 19, 51, 28, 829287, tzinfo=datetime.timezone.utc), 0.0, 376) after20 (datetime.datetime(2026, 11, 15, 19, 51, 58, 832973, tzinfo=datetime.timezone.utc), 30.0, 128972) delta_kb 128596
+MEASURED WINDOW 1 (datetime.datetime(2026, 11, 15, 19, 51, 28, 829287, tzinfo=datetime.timezone.utc), 0.0, 376)
+MEASURED WINDOW 1 (datetime.datetime(2026, 11, 15, 19, 51, 38, 829835, tzinfo=datetime.timezone.utc), 10.0, 123244)
+MEASURED WINDOW 1 (datetime.datetime(2026, 11, 15, 19, 51, 48, 831610, tzinfo=datetime.timezone.utc), 20.0, 128976)
+MEASURED WINDOW 1 (datetime.datetime(2026, 11, 15, 19, 51, 58, 832973, tzinfo=datetime.timezone.utc), 30.0, 128972)
+MEASURED D 2 start 2026-11-15T20:01:29.968464+00:00 complete 2026-11-15T20:01:34.387476+00:00 before (datetime.datetime(2026, 11, 15, 20, 1, 28, 891889, tzinfo=datetime.timezone.utc), 600.06, 125028) after20 (datetime.datetime(2026, 11, 15, 20, 1, 58, 897938, tzinfo=datetime.timezone.utc), 630.07, 130184) delta_kb 5156
+MEASURED WINDOW 2 (datetime.datetime(2026, 11, 15, 20, 1, 8, 889190, tzinfo=datetime.timezone.utc), 580.06, 125028)
+MEASURED WINDOW 2 (datetime.datetime(2026, 11, 15, 20, 1, 18, 890242, tzinfo=datetime.timezone.utc), 590.06, 125028)
+MEASURED WINDOW 2 (datetime.datetime(2026, 11, 15, 20, 1, 28, 891889, tzinfo=datetime.timezone.utc), 600.06, 125028)
+MEASURED WINDOW 2 (datetime.datetime(2026, 11, 15, 20, 1, 38, 893473, tzinfo=datetime.timezone.utc), 610.06, 130172)
+MEASURED WINDOW 2 (datetime.datetime(2026, 11, 15, 20, 1, 48, 896112, tzinfo=datetime.timezone.utc), 620.07, 130172)
+MEASURED WINDOW 2 (datetime.datetime(2026, 11, 15, 20, 1, 58, 897938, tzinfo=datetime.timezone.utc), 630.07, 130184)
+MEASURED D 3 start 2026-11-15T20:11:30.002718+00:00 complete 2026-11-15T20:11:33.347755+00:00 before (datetime.datetime(2026, 11, 15, 20, 11, 28, 975680, tzinfo=datetime.timezone.utc), 1200.15, 130228) after20 (datetime.datetime(2026, 11, 15, 20, 11, 48, 978439, tzinfo=datetime.timezone.utc), 1220.15, 129764) delta_kb -464
+MEASURED WINDOW 3 (datetime.datetime(2026, 11, 15, 20, 11, 8, 972971, tzinfo=datetime.timezone.utc), 1180.14, 130228)
+MEASURED WINDOW 3 (datetime.datetime(2026, 11, 15, 20, 11, 18, 974318, tzinfo=datetime.timezone.utc), 1190.15, 130228)
+MEASURED WINDOW 3 (datetime.datetime(2026, 11, 15, 20, 11, 28, 975680, tzinfo=datetime.timezone.utc), 1200.15, 130228)
+MEASURED WINDOW 3 (datetime.datetime(2026, 11, 15, 20, 11, 38, 977108, tzinfo=datetime.timezone.utc), 1210.15, 129756)
+MEASURED WINDOW 3 (datetime.datetime(2026, 11, 15, 20, 11, 48, 978439, tzinfo=datetime.timezone.utc), 1220.15, 129764)
+MEASURED WINDOW 3 (datetime.datetime(2026, 11, 15, 20, 11, 58, 979688, tzinfo=datetime.timezone.utc), 1230.15, 129756)

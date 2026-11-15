@@ -1,0 +1,4 @@
+- Step 0 complete: loop D start/completion timestamps added and committed as 4d80bbc; targeted lint passed.
+- Step 1 complete: MEASURED backup 2,428,336 bytes, SHA-256 a26accd40561d91c137f59cf4d702f5004005c6f8e216f922fe51eb2c0cf1616; metadata commit 6ab5c6b.
+- Step 2 complete: MEASURED worker duration 1800.041 seconds, 3 D cycles, 60 successful and 0 failed polls, 0 logged error events; samples and logs saved with `_1800` names.
+- Step 3 complete: MEASURED invariant checks and verify_rebuild passed; fresh block 97379082 reconciliation has 0 mismatches and 0 unknown for both wallets; RSS report saved.
