@@ -1,8 +1,11 @@
 import asyncio
+import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -11,6 +14,25 @@ from app.ingestion.source import EventSource
 from app.ingestion.writer import get_or_create_cursor_locked, write_event_batch
 
 logger = logging.getLogger("ingestion_poller")
+
+
+def record_committed_supersedes(events: list[dict]) -> None:
+    """Append live supersedes only after their ingestion transaction commits."""
+    if not events:
+        return
+    try:
+        path = Path("reports/supersede_events.log")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            for event in events:
+                payload = {"timestamp": datetime.now(timezone.utc).isoformat(), **event}
+                os.write(fd, (json.dumps(payload, separators=(",", ":")) + "\n").encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        logger.exception("Unable to record committed supersede events")
 
 
 @dataclass
@@ -192,6 +214,7 @@ class LivePoller:
 
             assigned = assigner.assign_ids(events, is_final=is_final)
             observed_now = datetime.now(timezone.utc)
+            supersede_events: list[dict] = []
 
             async with self.session_factory() as session:
                 async with session.begin():
@@ -205,8 +228,13 @@ class LivePoller:
                         now=observed_now,
                         on_new_event=self.metrics.record_event_lag,
                         update_last_success=update_last_success,
+                        monitor_events=supersede_events
+                        if self.source.source_tag == "data_api"
+                        else None,
                     )
                     cycle_inserted += ins
+
+            record_committed_supersedes(supersede_events)
 
             if is_final:
                 break
@@ -248,6 +276,7 @@ class LivePoller:
             is_final = not has_more
 
             assigned = assigner.assign_ids(events, is_final=is_final)
+            supersede_events = []
             async with self.session_factory() as session:
                 async with session.begin():
                     ins, _ = await write_event_batch(
@@ -257,8 +286,13 @@ class LivePoller:
                         events_with_ids=assigned,
                         next_cursor=None,
                         is_backfill_complete=True,
+                        monitor_events=supersede_events
+                        if self.source.source_tag == "data_api"
+                        else None,
                     )
                     reconcile_new += ins
+
+            record_committed_supersedes(supersede_events)
 
             if is_final:
                 break

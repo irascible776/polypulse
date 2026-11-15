@@ -14,7 +14,9 @@ from app.storage.models import IngestionCursor, PositionLedger, SourceEvent, Wal
 logger = logging.getLogger("ingestion_writer")
 
 
-async def supersede_trade_pairs(session: AsyncSession, wallet: str, key: str) -> dict[int, int]:
+async def supersede_trade_pairs(
+    session: AsyncSession, wallet: str, key: str, monitor_events: list | None = None
+) -> dict[int, int]:
     """Pair observations within one trade key, retaining already paired targets."""
     rows = (
         (
@@ -64,6 +66,19 @@ async def supersede_trade_pairs(session: AsyncSession, wallet: str, key: str) ->
                 .values(recompute_needed=True)
             )
         await session.flush()
+        if monitor_events is not None:
+            for row in rows:
+                if row.id in pairs:
+                    monitor_events.append(
+                        {
+                            "wallet": wallet,
+                            "token_id": row.token_id,
+                            "dedup_key": key,
+                            "source_event_id": row.source_event_id,
+                            "superseded_id": row.id,
+                            "survivor_id": pairs[row.id],
+                        }
+                    )
         logger.info(
             json.dumps(
                 {
@@ -196,6 +211,7 @@ async def write_event_batch(
     now: datetime | None = None,
     on_new_event: Any | None = None,
     update_last_success: bool = True,
+    monitor_events: list | None = None,
 ) -> tuple[int, int]:
     """
     Persist a batch of completed events with atomic per-wallet write locking.
@@ -298,7 +314,7 @@ async def write_event_batch(
         for row in insert_rows
         if row["event_type"] == "TRADE" and row["source_event_id"] in inserted_set
     }:
-        await supersede_trade_pairs(session, w, key)
+        await supersede_trade_pairs(session, w, key, monitor_events)
     if any(row["is_late"] and row["source_event_id"] in inserted_set for row in insert_rows):
         await session.execute(
             update(WalletTotal).where(WalletTotal.wallet == w).values(recompute_needed=True)
