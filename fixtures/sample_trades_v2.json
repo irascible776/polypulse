@@ -1,0 +1,42 @@
+{
+  "data": [
+    {
+      "proxy_wallet": "0x951634357346bb291df117f9ac410100feea2104",
+      "side": "BUY",
+      "token_id": "91027047039515555078480262066003399273625964896522601460638681904234161231814",
+      "condition_id": "0x60022c5a948ad070b3c95018820c30e924698de9e38ca2c9e9c72ce1803f7ecc",
+      "size": 3761.95,
+      "price": 0.27,
+      "timestamp": 1794384399,
+      "title": "Celtics vs. Raptors",
+      "slug": "nba-bos-tor-2026-11-11",
+      "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/super+cool+basketball+in+red+and+blue+wow.png",
+      "event_slug": "nba-bos-tor-2026-11-11",
+      "outcome": "Raptors",
+      "outcome_index": 1,
+      "transaction_hash": "0x22adbd5c36f4b251a68f73786e877bd2ada230dd3706cb6813db432b16eb0c4e"
+    },
+    {
+      "proxy_wallet": "0x951634357346bb291df117f9ac410100feea2104",
+      "side": "BUY",
+      "token_id": "10580278350592214049490365927807460295828206099379141040018693241627066031743",
+      "condition_id": "0x91fe159f75d42baeafd1db046011bd97fb1954e27f84adf9714fc9228b7531d3",
+      "size": 3439.1,
+      "price": 0.5,
+      "timestamp": 1794377646,
+      "title": "Nuggets vs. Grizzlies: O/U 228.5",
+      "slug": "nba-den-mem-2026-11-11-total-228pt5",
+      "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/super+cool+basketball+in+red+and+blue+wow.png",
+      "event_slug": "nba-den-mem-2026-11-11",
+      "outcome": "Over",
+      "outcome_index": 0,
+      "transaction_hash": "0xbfb2cd0be305fb398ce9d1f778c32abf18027db4e7ff7344c62b2de07b8040a3"
+    }
+  ],
+  "pagination": {
+    "limit": 2,
+    "offset": 0,
+    "has_more": true,
+    "next_cursor": "eyJkYXRhIjp7InR5cGUiOiJ0cmFkZXMiLCJwYXJhbXMiOnsibCI6MiwidHMiOjE3OTQzNzc2NDYsInNxIjoiOTcxMTQ3OTMwMDAzNjAzNjEwIiwiZCI6Mn19LCJzaWciOiJmZjVjMDVjMTJkODEzZWU2M2I1ZWQzYmFiNjVjNDg1OCJ9"
+  }
+}

@@ -1,6 +1,10 @@
 *
 !app/
 !app/**
+!scripts/
+!scripts/*.py
+!scripts/chain_scan_checkpoint.json
+!scripts/jn_tail_checkpoint.json
 !pyproject.toml
 !uv.lock
 !Dockerfile

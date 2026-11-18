@@ -1,34 +1,45 @@
-.PHONY: db-up run worker soak test bench lint migrate clean format
+.PHONY: db-up db-down up down run worker soak test bench lint migrate clean format
+
+UV := $(shell command -v uv 2>/dev/null || echo $$HOME/.local/bin/uv)
 
 db-up:
 	docker compose up -d postgres
 
+db-down:
+	docker compose down
+
+up:
+	bash scripts/dev.sh
+
+down:
+	docker compose down
+
 run:
-	~/.local/bin/uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+	$(UV) run --env-file .env uvicorn app.main:app --host 0.0.0.0 --port $${PORT:-8000} --reload
 
 worker:
-	~/.local/bin/uv run python -m app.worker
+	$(UV) run --env-file .env python -m app.worker
 
 soak:
-	~/.local/bin/uv run python -m scripts.soak_worker --duration 900
+	$(UV) run --env-file .env python -m scripts.soak_worker --duration 900
 
 test:
-	~/.local/bin/uv run python -m scripts.guard_test_database
-	~/.local/bin/uv run pytest -m "not benchmark"
+	$(UV) run python -m scripts.guard_test_database
+	$(UV) run pytest -m "not benchmark"
 
 bench:
-	-~/.local/bin/uv run python -m scripts.bench_serving
+	-$(UV) run --env-file .env python -m scripts.bench_serving
 
 lint:
-	~/.local/bin/uv run ruff check .
-	~/.local/bin/uv run ruff format --check .
+	$(UV) run ruff check .
+	$(UV) run ruff format --check .
 
 format:
-	~/.local/bin/uv run ruff format .
-	~/.local/bin/uv run ruff check --fix .
+	$(UV) run ruff format .
+	$(UV) run ruff check --fix .
 
 migrate:
-	~/.local/bin/uv run alembic upgrade head
+	$(UV) run --env-file .env alembic upgrade head
 
 clean:
 	rm -rf .pytest_cache .ruff_cache __pycache__

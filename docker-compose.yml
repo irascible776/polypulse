@@ -21,13 +21,72 @@ services:
     build: .
     profiles: ["worker"]
     command: ["uv", "run", "--no-sync", "python", "-m", "app.worker"]
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/polypulse
+      SECONDARY_DATABASE_URL: ${COMPOSE_SECONDARY_DATABASE_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
+  postgres2:
+    image: postgres:16-alpine
+    profiles: ["sharded"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: polypulse
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_secondary_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d polypulse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api1:
+    build: .
+    profiles: ["api"]
+    command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/polypulse
+      SECONDARY_DATABASE_URL: ${COMPOSE_SECONDARY_DATABASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api2:
+    build: .
+    profiles: ["api"]
+    command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/polypulse
+      SECONDARY_DATABASE_URL: ${COMPOSE_SECONDARY_DATABASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  proxy:
+    image: haproxy:2.8-alpine
+    profiles: ["api"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - api1
+      - api2
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  postgres_secondary_data:
 

@@ -17,7 +17,8 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+sa_url, sa_connect_args = settings.sqlalchemy_url_and_args()
+config.set_main_option("sqlalchemy.url", sa_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
@@ -47,6 +48,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={**sa_connect_args, "prepare_threshold": None},
     )
 
     async with connectable.connect() as connection:

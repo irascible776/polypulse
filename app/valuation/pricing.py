@@ -19,7 +19,15 @@ from sqlalchemy.orm import undefer
 
 from app.config import get_settings
 from app.serving.time_format import utc_timestamp
-from app.storage.models import MarketPrice, MarketResolution, Position, PositionLedger, SourceEvent
+from app.storage.database import market_session
+from app.storage.models import (
+    ArchivedMarketPrice,
+    MarketPrice,
+    MarketResolution,
+    Position,
+    PositionLedger,
+    SourceEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +56,8 @@ class PriceQuote:
     reason: str | None = None
     outcome: str | None = None
     price_time_known: bool = True
+    market_question: str | None = None
+    category: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +78,8 @@ class PriceQuote:
             "unpriced": self.price is None,
             "reason": self.reason,
             "outcome": self.outcome,
+            "market_question": self.market_question,
+            "category": self.category,
         }
 
 
@@ -126,45 +138,68 @@ class PriceResolver:
             )
         ).all()
         event_labels: dict[str, str] = {}
+        event_titles: dict[str, str] = {}
         for token, raw in event_rows:
-            label = raw.get("outcome") if isinstance(raw, dict) else None
-            if token and isinstance(label, str) and label:
+            if not token or not isinstance(raw, dict):
+                continue
+            label = raw.get("outcome")
+            if isinstance(label, str) and label:
                 event_labels.setdefault(token, label)
+            title = raw.get("title") or raw.get("question")
+            if isinstance(title, str) and title:
+                event_titles.setdefault(token, title)
         tokens = {token: (condition, index) for token, condition, index in position_rows}
         if token_context:
             tokens.update(token_context)
         for token, condition in ledger_rows:
             tokens.setdefault(token, (condition, None))
-        ticks = (
-            (
-                await session.execute(
-                    select(MarketPrice)
-                    .options(undefer(MarketPrice.bid), undefer(MarketPrice.ask))
-                    .where(
-                        MarketPrice.token_id.in_(unique_tokens), MarketPrice.observed_at <= ref_time
-                    )
-                    .order_by(desc(MarketPrice.observed_at), desc(MarketPrice.id))
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for tick in ticks:
-            if tick.condition_id:
-                tokens.setdefault(tick.token_id, (tick.condition_id, None))
-        conditions = {c for c, _ in tokens.values() if c}
-        resolutions = (
-            (
-                await session.execute(
-                    select(MarketResolution).where(
-                        MarketResolution.condition_id.in_(conditions),
-                        MarketResolution.checked_at <= ref_time,
+        async with market_session(session) as market_db:
+            ticks = (
+                (
+                    await market_db.execute(
+                        select(MarketPrice)
+                        .options(undefer(MarketPrice.bid), undefer(MarketPrice.ask))
+                        .where(
+                            MarketPrice.token_id.in_(unique_tokens),
+                            MarketPrice.observed_at <= ref_time,
+                        )
+                        .order_by(desc(MarketPrice.observed_at), desc(MarketPrice.id))
                     )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
+            archived = (
+                (
+                    await market_db.execute(
+                        select(ArchivedMarketPrice).where(
+                            ArchivedMarketPrice.token_id.in_(unique_tokens),
+                            ArchivedMarketPrice.observed_at <= ref_time,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            ticks = sorted(
+                [*ticks, *archived], key=lambda tick: (tick.observed_at, tick.id), reverse=True
+            )
+            for tick in ticks:
+                if tick.condition_id:
+                    tokens.setdefault(tick.token_id, (tick.condition_id, None))
+            conditions = {c for c, _ in tokens.values() if c}
+            resolutions = (
+                (
+                    await market_db.execute(
+                        select(MarketResolution).where(
+                            MarketResolution.condition_id.in_(conditions),
+                            MarketResolution.checked_at <= ref_time,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
         states = {r.condition_id: r for r in resolutions}
         grouped = {token: [] for token in unique_tokens}
         for tick in ticks:
@@ -174,11 +209,20 @@ class PriceResolver:
             condition, outcome_index = tokens.get(token, (None, None))
             state = states.get(condition)
             label = event_labels.get(token)
+            question = event_titles.get(token)
+            category: str | None = None
             verified_outcome = False
             if state:
+                gamma = state.gamma_raw if isinstance(state.gamma_raw, dict) else {}
+                raw_question = gamma.get("question") or gamma.get("title")
+                if isinstance(raw_question, str) and raw_question.strip():
+                    question = raw_question.strip()
+                raw_cat = gamma.get("category")
+                if isinstance(raw_cat, str) and raw_cat.strip():
+                    category = raw_cat.strip()
                 try:
-                    raw_ids = state.gamma_raw.get("clobTokenIds") or "[]"
-                    raw_labels = state.gamma_raw.get("outcomes") or "[]"
+                    raw_ids = gamma.get("clobTokenIds") or "[]"
+                    raw_labels = gamma.get("outcomes") or "[]"
                     ids = json.loads(raw_ids) if isinstance(raw_ids, str) else raw_ids
                     labels = json.loads(raw_labels) if isinstance(raw_labels, str) else raw_labels
                     if token in ids:
@@ -209,6 +253,8 @@ class PriceResolver:
                         False,
                         estimated=True,
                         outcome=label,
+                        market_question=question,
+                        category=category,
                     )
                     continue
             closed = bool(state and state.gamma_closed)
@@ -260,6 +306,8 @@ class PriceResolver:
                     ask=tick.ask,
                     outcome=label,
                     price_time_known=tick.source != "last_trade",
+                    market_question=question,
+                    category=category,
                 )
             else:
                 reason = "no valid price tick"
@@ -278,6 +326,8 @@ class PriceResolver:
                     market_closed_unresolved=closed_unresolved,
                     reason=reason,
                     outcome=label,
+                    market_question=question,
+                    category=category,
                 )
         return results
 

@@ -60,6 +60,14 @@ class SourceEvent(Base):
         UniqueConstraint("wallet", "source_event_id", name="uq_source_events_wallet_event_id"),
         Index("ix_source_events_wallet_time_order", "wallet", "event_time", "api_order"),
         Index("ix_source_events_wallet_dedup", "wallet", "dedup_key"),
+        Index("ix_source_events_observed_at", "observed_at"),
+        Index(
+            "ix_source_events_wallet_condition_time",
+            "wallet",
+            "condition_id",
+            "event_time",
+            "api_order",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
@@ -108,6 +116,7 @@ class IngestionCursor(Base):
     source: Mapped[str] = mapped_column(Text, primary_key=True)
     backfill_state: Mapped[str] = mapped_column(Text, nullable=False, default="not_started")
     last_event_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    backfill_resume_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -164,11 +173,14 @@ class WalletTotal(Base):
     unsupported_event_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reject_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_applied_api_order: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    publication_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     last_recompute_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     recompute_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     recompute_needed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    recompute_from_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recompute_from_order: Mapped[int | None] = mapped_column(BigInteger)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     def __repr__(self) -> str:
@@ -176,6 +188,37 @@ class WalletTotal(Base):
             f"<WalletTotal wallet={self.wallet} pnl={self.total_realized_pnl} "
             f"trades={self.total_trade_count} redeems={self.total_redeem_count}>"
         )
+
+
+class AccountingCheckpoint(Base):
+    __tablename__ = "accounting_checkpoints"
+
+    wallet: Mapped[str] = mapped_column(Text, primary_key=True)
+    boundary_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    boundary_order: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    last_api_order: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    positions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    totals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class ConditionCheckpoint(Base):
+    __tablename__ = "condition_checkpoints"
+
+    wallet: Mapped[str] = mapped_column(Text, primary_key=True)
+    condition_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    boundary_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    boundary_order: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    format_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    positions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+
+
+class ConditionReplayDirty(Base):
+    __tablename__ = "condition_replay_dirty"
+
+    wallet: Mapped[str] = mapped_column(Text, primary_key=True)
+    condition_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    boundary_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    boundary_order: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class PositionLedger(Base):
@@ -262,6 +305,14 @@ class ProjectorCursor(Base):
             f"<ProjectorCursor wallet={self.wallet} "
             f"last_applied_api_order={self.last_applied_api_order}>"
         )
+
+
+class ChainScanCursor(Base):
+    __tablename__ = "chain_scan_cursors"
+
+    wallet: Mapped[str] = mapped_column(Text, primary_key=True)
+    direction: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class ChainEvent(Base):
@@ -366,7 +417,7 @@ class MarketPrice(Base):
     bid: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True, deferred=True)
     ask: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True, deferred=True)
     source: Mapped[str] = mapped_column(Text, nullable=False)
-    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     def __repr__(self) -> str:
@@ -374,3 +425,37 @@ class MarketPrice(Base):
             f"<MarketPrice id={self.id} token={self.token_id[:10]} "
             f"price={self.price} source={self.source} observed={self.observed_at}>"
         )
+
+
+class ArchivedMarketPrice(Base):
+    __tablename__ = "market_price_archive"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    condition_id: Mapped[str | None] = mapped_column(Text)
+    token_id: Mapped[str] = mapped_column(Text, nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    bid: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    ask: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ServiceHeartbeat(Base):
+    """Per-instance liveness, latency, WS, and bucket-ownership heartbeat on Shard 0."""
+
+    __tablename__ = "service_heartbeats"
+    __table_args__ = (Index("ix_service_heartbeats_last_seen", "last_seen_at"),)
+
+    instance_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    shard_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ws_connections: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    listener_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    buckets_held: Mapped[list[int]] = mapped_column(JSONB, nullable=False, default=list)
+    latency_p50_ms: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    latency_p95_ms: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    latency_p99_ms: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)

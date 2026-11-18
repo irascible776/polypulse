@@ -7,6 +7,7 @@ Re-sums position_ledger per wallet and per token, asserting that it
 exactly matches positions.shares and wallet_totals.total_realized_pnl.
 """
 
+import argparse
 import asyncio
 import os
 import sys
@@ -17,12 +18,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from sqlalchemy import func, select
 
-from app.storage.database import async_session_factory
+from app.storage.database import validate_wallet_shard, wallet_session_factory
 from app.storage.models import Position, PositionLedger, PositionLedgerReject, WalletTotal
 
 
 async def verify_wallet_rebuild(wallet: str) -> bool:
-    async with async_session_factory() as session:
+    async with wallet_session_factory(wallet)() as session:
+        await validate_wallet_shard(session, wallet)
         print("\n=======================================================")
         print(f"VERIFYING REBUILD INVARIANTS FOR WALLET: {wallet}")
         print("=======================================================")
@@ -98,8 +100,8 @@ async def verify_wallet_rebuild(wallet: str) -> bool:
         return True
 
 
-async def main():
-    wallets = [
+async def main(wallets=None):
+    wallets = wallets or [
         "0x951634357346bb291df117f9ac410100feea2104",  # AppleTiiime
         "0xa98a9d23e7211c22d2259b68b1bc9d47b3013b92",  # JnStPrdctns
     ]
@@ -119,4 +121,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--wallet", action="append", help="Wallet to verify; repeat for multiple")
+    args = parser.parse_args()
+    asyncio.run(main(args.wallet))

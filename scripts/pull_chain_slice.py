@@ -20,10 +20,16 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chain.decoder import decode_log
 from app.chain.rpc import CTF_CONTRACT, PolygonRpcClient
-from app.storage.database import async_session_factory
+from app.storage.database import (
+    secondary_engine,
+    validate_wallet_shard,
+    wallet_read_session,
+    wallet_session_factory,
+)
 from app.storage.models import ChainEvent, SourceEvent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -64,7 +70,7 @@ async def pull_transaction_receipt_slice(
     wallet: str,
 ) -> tuple[list[dict], list[int], list[str]]:
     """Fetch each known trade/redeem transaction once in JSON-RPC batches."""
-    async with async_session_factory() as session:
+    async with wallet_read_session(wallet) as session:
         stmt = (
             select(SourceEvent.transaction_hash)
             .where(
@@ -136,45 +142,54 @@ async def pull_recent_block_slice(
     return logs
 
 
-async def save_chain_events(events: list) -> int:
+async def save_chain_events(events: list, session: AsyncSession | None = None) -> int:
     """Save decoded events to chain_events table with ON CONFLICT DO NOTHING."""
     if not events:
         return 0
 
+    if session is None:
+        wallets = {event.wallet for event in events}
+        if secondary_engine is not None and len(wallets) != 1:
+            raise ValueError("A chain-event batch must contain exactly one wallet when sharded")
+        wallet = events[0].wallet
+        async with wallet_session_factory(wallet)() as owned_session:
+            await validate_wallet_shard(owned_session, wallet)
+            inserted = await save_chain_events(events, owned_session)
+            await owned_session.commit()
+            return inserted
+
     inserted_count = 0
     now_ts = datetime.now(timezone.utc)
 
-    async with async_session_factory() as session:
-        for ev in events:
-            stmt = (
-                insert(ChainEvent)
-                .values(
-                    wallet=ev.wallet,
-                    block_number=ev.block_number,
-                    block_time=ev.block_time,
-                    transaction_hash=ev.transaction_hash,
-                    log_index=ev.log_index,
-                    batch_index=ev.batch_index,
-                    block_hash=ev.raw_log["blockHash"],
-                    contract_address=ev.contract_address,
-                    event_name=ev.event_name,
-                    condition_id=ev.condition_id,
-                    token_id=ev.token_id,
-                    from_address=ev.from_address,
-                    to_address=ev.to_address,
-                    amount=ev.amount,
-                    raw_log=ev.raw_log,
-                    created_at=now_ts,
-                )
-                .on_conflict_do_nothing(
-                    index_elements=["wallet", "transaction_hash", "log_index", "batch_index"]
-                )
-                .returning(ChainEvent.id)
+    for ev in events:
+        stmt = (
+            insert(ChainEvent)
+            .values(
+                wallet=ev.wallet,
+                block_number=ev.block_number,
+                block_time=ev.block_time,
+                transaction_hash=ev.transaction_hash,
+                log_index=ev.log_index,
+                batch_index=ev.batch_index,
+                block_hash=ev.raw_log["blockHash"],
+                contract_address=ev.contract_address,
+                event_name=ev.event_name,
+                condition_id=ev.condition_id,
+                token_id=ev.token_id,
+                from_address=ev.from_address,
+                to_address=ev.to_address,
+                amount=ev.amount,
+                raw_log=ev.raw_log,
+                created_at=now_ts,
             )
-            res = await session.execute(stmt)
-            if res.scalar_one_or_none() is not None:
-                inserted_count += 1
-        await session.commit()
+            .on_conflict_do_nothing(
+                index_elements=["wallet", "transaction_hash", "log_index", "batch_index"]
+            )
+            .returning(ChainEvent.id)
+        )
+        res = await session.execute(stmt)
+        if res.scalar_one_or_none() is not None:
+            inserted_count += 1
     return inserted_count
 
 

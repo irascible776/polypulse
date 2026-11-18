@@ -66,3 +66,10 @@ class ApplyResult:
     success: ApplySuccess | None = None
     reject: ApplyReject | None = None
     is_unsupported: bool = False
+
+
+@dataclass(frozen=True)
+class ConditionEffect:
+    event: AccountingEvent
+    result: ApplyResult
+    position: PositionState | None

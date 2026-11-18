@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
 from app.ingestion.source import PageResult
 from app.storage.database import async_session_factory
 from app.storage.models import MarketPrice, MarketResolution, SourceEvent
 from app.valuation.pricing import PriceResolver
-from app.worker import Worker
+from app.worker import BUCKET_LOCK_NAMESPACE, Worker, wallet_bucket
 
 
 @pytest.mark.asyncio
@@ -164,7 +164,7 @@ async def test_gamma_closed_unresolved_is_queued_for_resolution():
 async def test_urgent_resolution_cycle_checks_queued_condition(monkeypatch):
     condition = "0x" + uuid.uuid4().hex * 2
     checked = AsyncMock(return_value={"condition_id": condition})
-    saved = AsyncMock()
+    saved = AsyncMock(return_value=True)
     monkeypatch.setattr("app.worker.check_resolution", checked)
     monkeypatch.setattr("app.worker.save_resolution", saved)
     worker = Worker()
@@ -222,4 +222,160 @@ async def test_wallet_advisory_lock_skips_concurrent_worker():
             )
             == 1
         )
+    await worker.close()
+
+
+@pytest.mark.asyncio
+async def test_bucket_failover_prevents_old_worker_writes():
+    wallet = "0x" + uuid.uuid4().hex + "0" * 8
+    entered, release = asyncio.Event(), asyncio.Event()
+    event = {
+        "proxy_wallet": wallet,
+        "type": "TRADE",
+        "side": "BUY",
+        "timestamp": int(datetime.now(timezone.utc).timestamp()),
+        "size": "1",
+        "usdc_size": "0.4",
+        "price": "0.4",
+        "condition_id": "test_condition",
+        "token_id": "test_token",
+        "transaction_hash": "0x" + uuid.uuid4().hex * 2,
+    }
+
+    class Source:
+        source_tag = "data_api"
+
+        def __init__(self, wait):
+            self.wait = wait
+
+        async def fetch_page(self, **kwargs):
+            if self.wait:
+                entered.set()
+                await release.wait()
+            return PageResult(events=[event], next_cursor=None, has_more=False)
+
+        async def close(self):
+            pass
+
+    first, second = Worker(), Worker()
+    await first.source.close()
+    await second.source.close()
+    first.source, second.source = Source(True), Source(False)
+    first.active_wallets = AsyncMock(return_value=[wallet])
+    second.active_wallets = AsyncMock(return_value=[wallet])
+    task = asyncio.create_task(first.poll_cycle())
+    await asyncio.wait_for(entered.wait(), 10)
+    async with async_session_factory() as session:
+        pid = await session.scalar(
+            text("""
+                SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted
+                AND classid = :namespace AND objid = :bucket AND objsubid = 2
+            """),
+            {"namespace": BUCKET_LOCK_NAMESPACE, "bucket": wallet_bucket(wallet)},
+        )
+        assert pid is not None
+        assert await session.scalar(text("SELECT pg_terminate_backend(:pid)"), {"pid": pid})
+    await asyncio.wait_for(second.poll_cycle(), 10)
+    release.set()
+    await asyncio.wait_for(task, 10)
+    async with async_session_factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(SourceEvent).where(SourceEvent.wallet == wallet)
+            )
+            == 1
+        )
+    await first.close()
+    await second.close()
+
+
+@pytest.mark.asyncio
+async def test_workers_claim_wallet_bucket_once():
+    wallet = "0x" + uuid.uuid4().hex + "0" * 8
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def run_wallet(member, connection):
+        calls.append(member)
+        entered.set()
+        await release.wait()
+
+    first, second = Worker(), Worker()
+    first.active_wallets = AsyncMock(return_value=[wallet])
+    second.active_wallets = AsyncMock(return_value=[wallet])
+    first.wallet_cycle = run_wallet
+    second.wallet_cycle = run_wallet
+    task = asyncio.create_task(first.poll_cycle())
+    await asyncio.wait_for(entered.wait(), 10)
+    await asyncio.wait_for(second.poll_cycle(), 10)
+    assert calls == [wallet]
+    release.set()
+    await asyncio.wait_for(task, 10)
+    assert wallet_bucket(wallet) == wallet_bucket(wallet.upper())
+    await first.close()
+    await second.close()
+
+
+@pytest.mark.asyncio
+async def test_wallet_lock_connection_loss_stops_old_worker():
+    wallet = "0x" + uuid.uuid4().hex + "0" * 8
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Source:
+        source_tag = "data_api"
+
+        async def fetch_page(self, **kwargs):
+            entered.set()
+            await release.wait()
+            return PageResult(
+                events=[
+                    {
+                        "proxy_wallet": wallet,
+                        "type": "TRADE",
+                        "side": "BUY",
+                        "timestamp": int(datetime.now(timezone.utc).timestamp()),
+                        "size": "1",
+                        "usdc_size": "0.4",
+                        "price": "0.4",
+                        "condition_id": "test_condition",
+                        "token_id": "test_token",
+                        "transaction_hash": "0x" + uuid.uuid4().hex * 2,
+                    }
+                ],
+                next_cursor=None,
+                has_more=False,
+            )
+
+        async def close(self):
+            pass
+
+    worker = Worker()
+    await worker.source.close()
+    worker.source = Source()
+    task = asyncio.create_task(worker.wallet_cycle(wallet))
+    await asyncio.wait_for(entered.wait(), timeout=10)
+    async with async_session_factory() as session:
+        pid = await session.scalar(
+            text("""
+                SELECT pid FROM pg_locks
+                WHERE locktype = 'advisory' AND granted
+                  AND classid = ((hashtextextended(:wallet, 0) >> 32) & 4294967295)::oid
+                  AND objid = (hashtextextended(:wallet, 0) & 4294967295)::oid
+                  AND objsubid = 1
+            """),
+            {"wallet": wallet},
+        )
+        assert pid is not None
+        assert await session.scalar(text("SELECT pg_terminate_backend(:pid)"), {"pid": pid})
+    release.set()
+    await asyncio.gather(task, return_exceptions=True)
+    async with async_session_factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(SourceEvent).where(SourceEvent.wallet == wallet)
+            )
+            == 0
+        )
+    result = await worker.wallet_cycle(wallet)
+    assert result["inserted"] == 1
     await worker.close()

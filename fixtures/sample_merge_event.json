@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "proxy_wallet": "0x204f72f35326db932158cba6adff0b9a1da95e14",
+      "timestamp": 1787732173,
+      "condition_id": "0x244594c21b55f9f07af5a288ff9f41ff77324aa24b6fcc6f8341337c23c62806",
+      "type": "MERGE",
+      "size": 6994.8506,
+      "usdc_size": 6994.8506,
+      "transaction_hash": "0xab9e20f4b6a7bc9c55a830d0a3d8517a84dba57a4c73800cf2c295d322a8e97c",
+      "price": 0.0,
+      "token_id": "",
+      "side": "",
+      "outcome_index": 999,
+      "title": "Will Real Madrid CF win on 2026-08-26?",
+      "slug": "lal-rea-rso-2026-08-26-rea",
+      "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/league-lal.png",
+      "event_slug": "lal-rea-rso-2026-08-26",
+      "outcome": ""
+    }
+  ],
+  "pagination": {
+    "limit": 1,
+    "offset": 0,
+    "has_more": true,
+    "next_cursor": "eyJkYXRhIjp7InR5cGUiOiJhY3Rpdml0eSIsInBhcmFtcyI6eyJsIjoxLCJ0cyI6MTc4NzczMjE3Mywic3EiOiI5MjY4NDc2NDAwMTAyMTAwODAiLCJkIjoxfX0sInNpZyI6ImVlNTI2YTVhNmI0Y2Q4NTcyNDNmNjkwMzdlYThjM2U5In0"
+  }
+}

@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.chain.decoder import decode_log
 from app.chain.rpc import CTF_CONTRACT, PolygonRpcClient
-from app.storage.database import async_session_factory
+from app.storage.database import validate_wallet_shard, wallet_session_factory
 from app.storage.models import ChainEvent, IngestionCursor, Position, PositionLedger, SourceEvent
 
 logger = logging.getLogger("reconcile_chain")
@@ -97,8 +97,12 @@ async def reconcile_wallet(
     wallet: str,
     reference_block: int,
     reference_time: datetime,
+    session_factory=None,
 ) -> dict:
-    async with async_session_factory() as session:
+    if session_factory is None:
+        session_factory = wallet_session_factory(wallet)
+    async with session_factory() as session:
+        await validate_wallet_shard(session, wallet)
         positions = (
             (await session.execute(select(Position).where(Position.wallet == wallet)))
             .scalars()

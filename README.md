@@ -71,6 +71,66 @@ scratch data; an empty schema alone does not reproduce the integration fixtures.
 forces cold valuation; `BENCH_REQUESTS` controls the sample size. The benchmark
 prints measurements rather than enforcing a performance threshold.
 
+## Two-shard local setup
+
+The optional two-shard setup routes each wallet to one of 16 stable buckets. Buckets
+0–7 live on the primary database and 8–15 on the secondary. Market prices and
+resolution evidence live on the primary. Each database rejects writes for wallets
+owned by the other shard. Workers claim buckets with advisory locks and keep the
+lock and wallet transactions on the same connection.
+This is a fixed two-database mapping, not automatic shard rebalancing. API reads
+use a consistent snapshot within each database; wallet and shared-market snapshots
+are separate and do not form a cross-database transaction.
+
+1. Set `SECONDARY_DATABASE_URL` in `.env` to the secondary's local connection URL
+   using `localhost:5433`. For Compose services also set
+   `COMPOSE_SECONDARY_DATABASE_URL` to the corresponding URL using `postgres2:5432`.
+2. Start both databases with `docker compose --profile sharded up -d postgres postgres2`.
+3. Export `.env` for local commands with `set -a; . ./.env; set +a`. Run `make migrate`
+   for the primary and `DATABASE_URL="$SECONDARY_DATABASE_URL" make migrate` for the
+   empty secondary.
+4. Run `uv run python -m scripts.initialize_wallet_shards`. The command locks wallet
+   tables, copies and verifies secondary-owned rows, then changes ownership. It requires
+   an empty secondary. A retry resumes a previously interrupted copy or activation.
+5. Run `docker compose --profile sharded --profile api --profile worker up -d`.
+   The proxy listens on `localhost:8080` and checks both API replicas through `/ready`.
+
+The initialization command blocks wallet writes while copying. Take a backup of the
+existing primary before running it. The proxy is a single point of failure. When the
+primary is unavailable, secondary wallet trades remain readable, while valuations
+that require the shared market store return 503. All-wallet status returns 503 if a
+shard cannot be read.
+
+`uv run python -m scripts.backup_shards --output backups/phase6-backup` writes a
+coordinated pair of custom-format dumps and a SHA-256 manifest. The output directory
+must not already exist. The command holds write-blocking locks on both shards until
+the dumps finish. Use `--pg-dump /path/to/pg_dump` if the executable is not on PATH.
+Restore each dump with `pg_restore --no-owner --no-acl` into a fresh database on the
+corresponding shard. With writers stopped, point both database URLs at the restores
+and run `uv run python -m scripts.check_shard_restore --backup backups/phase6-backup`.
+The read-only check verifies dump hashes, shard ownership and wallet ledger
+invariants. It does not compare every restored row with the dump or prove that the
+databases were restored from that particular backup. Backups are separate from
+accounting checkpoints; there is no scheduled or off-machine backup in this setup.
+
+Recent price ticks are partitioned by UTC day. After the configured
+`PRICE_RAW_RETENTION_DAYS`, the worker moves old ticks into a partitioned exact-price
+archive and records hourly closing observations. Historical price queries read both
+stores. The archive remains on the same database and continues to grow; moving it
+to separate storage is an operational follow-up.
+
+In-order accounting uses persisted positions. A late event replays from a valid
+wallet checkpoint when one exists, and supersession falls back to full replay.
+The checkpoint covers the whole wallet, not individual tokens; a correction before
+all available checkpoints may also require a full replay. Full replay reads events
+in bounded batches. Split and merge events are still recorded as unsupported by the
+accounting engine.
+
+Local benchmark results and their limitations are recorded in
+[`docs/phase6/measurements.md`](docs/phase6/measurements.md).
+The [Phase 7 assessment](docs/phase6/phase7-accounting-assessment.md) describes
+the coordination needed before parallel accounting within a wallet.
+
 ## Meaning of the numbers
 
 - **Realized PnL:** gains or losses from applied closing events in the ledger.

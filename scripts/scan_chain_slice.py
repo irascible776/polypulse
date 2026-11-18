@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 
 from app.chain.decoder import TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, decode_log
 from app.chain.rpc import CTF_CONTRACT, PolygonRpcClient
-from app.storage.database import async_session_factory
+from app.storage.database import wallet_read_session
 from app.storage.models import SourceEvent
 from scripts.pull_chain_slice import WALLETS, save_chain_events
 
@@ -177,18 +177,16 @@ async def main():
         state["_reference_block"] = end
         save_checkpoint(state)
     print(f"REFERENCE_BLOCK {end} margin={MARGIN_BLOCKS} endpoint={ENDPOINT}", flush=True)
-    async with async_session_factory() as session:
-        earliest = {}
-        for label, wallet in WALLETS:
+    earliest = {}
+    for label, wallet in WALLETS:
+        async with wallet_read_session(wallet) as session:
             value = await session.scalar(
                 select(func.min(SourceEvent.event_time)).where(SourceEvent.wallet == wallet)
             )
-            if value is None:
-                raise RuntimeError(f"no source events for {wallet}")
-            earliest[wallet] = await first_block(client, int(value.timestamp()), end)
-            print(
-                f"START {label} timestamp={value.isoformat()} block={earliest[wallet]}", flush=True
-            )
+        if value is None:
+            raise RuntimeError(f"no source events for {wallet}")
+        earliest[wallet] = await first_block(client, int(value.timestamp()), end)
+        print(f"START {label} timestamp={value.isoformat()} block={earliest[wallet]}", flush=True)
     estimate = sum(2 * ((max(0, end - start + 1) + 9999) // 10000) for start in earliest.values())
     print(f"ESTIMATED eth_getLogs calls={estimate}", flush=True)
     if estimate > 5000:

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -7,6 +8,7 @@ from app.ingestion.data_api import InvalidCursorError
 from app.ingestion.identifiers import EventIdAssigner
 from app.ingestion.source import EventSource
 from app.ingestion.writer import get_or_create_cursor_locked, write_event_batch
+from app.storage.models import IngestionCursor
 
 logger = logging.getLogger("ingestion_backfill")
 
@@ -22,7 +24,7 @@ async def run_wallet_backfill(
     Follows: start=1, ascending, 500 per page.
     Saves each page's events in one transaction with INSERT ... ON CONFLICT DO NOTHING.
     Updates ingestion_cursors in the SAME transaction.
-    Resumes seamlessly after interruptions using saved cursor or last_event_time - 1s fallback.
+    Resumes after interruptions using an overlap before the last committed event time.
     Marks backfill_state = complete on final page.
     """
     w = wallet.lower()
@@ -42,24 +44,21 @@ async def run_wallet_backfill(
                 "pages": 0,
             }
 
-        saved_cursor = cursor_record.last_cursor
-        last_event_time = cursor_record.last_event_time
+        last_event_time = cursor_record.backfill_resume_time
         await session.commit()
 
     assigner = EventIdAssigner(wallet=w)
-    cursor = saved_cursor
+    cursor = None
     start = None
 
-    if not cursor:
-        if last_event_time is not None:
-            # Fallback restart from last flushed second - 1 (inclusive check confirmed)
-            start = max(1, int(last_event_time.timestamp()) - 1)
-            logger.info("Resuming backfill for %s from start timestamp %d", w, start)
-        else:
-            start = 1
-            logger.info("Starting initial backfill for %s with start=1", w)
+    if last_event_time is not None:
+        # The trailing timestamp group may still be held in memory across pages.
+        # Restart before the last committed group so no held events are skipped.
+        start = max(1, int(last_event_time.timestamp()) - 1)
+        logger.info("Resuming backfill for %s from start timestamp %d", w, start)
     else:
-        logger.info("Resuming backfill for %s using saved cursor: %s...", w, cursor[:20])
+        start = 1
+        logger.info("Starting initial backfill for %s with start=1", w)
 
     page_count = 0
     total_inserted = 0
@@ -93,11 +92,13 @@ async def run_wallet_backfill(
             # Re-read last event time from DB
             async with session_factory() as session:
                 c = await get_or_create_cursor_locked(session, w, source_tag)
-                let = c.last_event_time
+                let = c.backfill_resume_time
                 await session.commit()
 
             start = max(1, int(let.timestamp()) - 1) if let else 1
             cursor = None
+            assigner.reset()
+            seen_cursors.clear()
             page_res = await source.fetch_page(
                 wallet=w,
                 cursor=None,
@@ -122,11 +123,21 @@ async def run_wallet_backfill(
                     wallet=w,
                     source=source_tag,
                     events_with_ids=assigned,
-                    next_cursor=next_cursor,
+                    next_cursor=None,
                     is_backfill_complete=is_final,
                 )
                 total_inserted += ins
                 total_duplicates += dups
+                stored_cursor = await session.get(IngestionCursor, (w, source_tag))
+                stored_cursor.last_cursor = None
+                if assigned:
+                    last_group_time = max(int(event.get("timestamp") or 0) for event, _ in assigned)
+                    committed_time = datetime.fromtimestamp(last_group_time, tz=timezone.utc)
+                    if (
+                        stored_cursor.backfill_resume_time is None
+                        or committed_time > stored_cursor.backfill_resume_time
+                    ):
+                        stored_cursor.backfill_resume_time = committed_time
 
         logger.info(
             "Wallet %s page %d: %d events processed (%d inserted, %d duplicates). has_more=%s",

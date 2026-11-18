@@ -1,0 +1,87 @@
+{
+  "1": {
+    "events": 30000,
+    "wallets": 30,
+    "workers_per_shard": 1,
+    "seed": 6,
+    "hot_wallet_events": 6000,
+    "seconds": 37.05741572399711,
+    "events_per_second": 809.5545632064416,
+    "wallet_completion_p95_seconds": 36.366957977999846,
+    "api_p95_ms": 26.59840300111682,
+    "api_status_counts": {
+      "200": 335
+    },
+    "checkpoint_replay_events": 1001,
+    "checkpoint_replay_seconds": 0.34304891399733606,
+    "full_replay_events": 6001,
+    "full_replay_seconds": 1.6316452760001994,
+    "database_bytes": [
+      47512599,
+      42810391
+    ],
+    "process_max_rss_kib": 139992,
+    "worker_process_max_rss_kib": [
+      176740
+    ],
+    "duplicate_delivery_added": 0
+  },
+  "2": {
+    "events": 30000,
+    "wallets": 30,
+    "workers_per_shard": 2,
+    "seed": 6,
+    "hot_wallet_events": 6000,
+    "seconds": 31.632865285999287,
+    "events_per_second": 948.3807340487112,
+    "wallet_completion_p95_seconds": 28.142671536999842,
+    "api_p95_ms": 33.84963899952709,
+    "api_status_counts": {
+      "200": 278
+    },
+    "checkpoint_replay_events": 1001,
+    "checkpoint_replay_seconds": 0.5641302229996654,
+    "full_replay_events": 6001,
+    "full_replay_seconds": 1.6305736809990776,
+    "database_bytes": [
+      47660055,
+      43392023
+    ],
+    "process_max_rss_kib": 140128,
+    "worker_process_max_rss_kib": [
+      169788,
+      150540
+    ],
+    "duplicate_delivery_added": 0
+  },
+  "4": {
+    "events": 30000,
+    "wallets": 30,
+    "workers_per_shard": 4,
+    "seed": 6,
+    "hot_wallet_events": 6000,
+    "seconds": 33.289476399000705,
+    "events_per_second": 901.185697258385,
+    "wallet_completion_p95_seconds": 29.33619776100022,
+    "api_p95_ms": 40.435924998746486,
+    "api_status_counts": {
+      "200": 287
+    },
+    "checkpoint_replay_events": 1001,
+    "checkpoint_replay_seconds": 0.385608800999762,
+    "full_replay_events": 6001,
+    "full_replay_seconds": 2.5869270319999487,
+    "database_bytes": [
+      47914007,
+      43457559
+    ],
+    "process_max_rss_kib": 139900,
+    "worker_process_max_rss_kib": [
+      120824,
+      121068,
+      84844,
+      170088
+    ],
+    "duplicate_delivery_added": 0
+  }
+}

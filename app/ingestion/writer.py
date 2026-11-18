@@ -4,20 +4,66 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, update
+from psycopg.types.json import Jsonb
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounting.checkpoints import configure_transaction, mark_condition_dirty
+from app.config import get_settings
 from app.ingestion.dedup import dedup_key, pair_enrichment
-from app.storage.models import IngestionCursor, PositionLedger, SourceEvent, WalletTotal
+from app.storage.models import IngestionCursor, ProjectorCursor, SourceEvent
 
 logger = logging.getLogger("ingestion_writer")
+
+INSERT_BATCH_SIZE = 500
+
+
+async def _copy_insert_events(session: AsyncSession, rows: list[dict]) -> list[str]:
+    columns = list(rows[0])
+    column_sql = ", ".join(columns)
+    await session.execute(
+        text(
+            f"CREATE TEMP TABLE IF NOT EXISTS source_event_stage ON COMMIT DROP AS "
+            f"SELECT {column_sql} FROM source_events WHERE false"
+        )
+    )
+    await session.execute(text("TRUNCATE source_event_stage"))
+    connection = await session.connection()
+    raw = await connection.get_raw_connection()
+    async with raw.driver_connection.cursor() as cursor:
+        async with cursor.copy(f"COPY source_event_stage ({column_sql}) FROM STDIN") as copy:
+            for row in rows:
+                await copy.write_row(
+                    tuple(
+                        Jsonb(row[column]) if column == "raw" else row[column] for column in columns
+                    )
+                )
+    result = await session.execute(
+        text(
+            f"INSERT INTO source_events ({column_sql}) SELECT {column_sql} "
+            "FROM source_event_stage ORDER BY api_order "
+            "ON CONFLICT (wallet, source_event_id) DO NOTHING RETURNING source_event_id"
+        )
+    )
+    return list(result.scalars())
 
 
 async def supersede_trade_pairs(
     session: AsyncSession, wallet: str, key: str, monitor_events: list | None = None
 ) -> dict[int, int]:
     """Pair observations within one trade key, retaining already paired targets."""
+    return await _supersede_trade_keys(session, wallet, {key}, monitor_events)
+
+
+async def _supersede_trade_keys(
+    session: AsyncSession, wallet: str, keys: set[str], monitor_events: list | None
+) -> dict[int, int]:
+    if not keys:
+        return {}
+    from app.accounting.projector import AccountingProjector
+
+    total = await AccountingProjector().get_or_create_wallet_total(session, wallet)
     rows = (
         (
             await session.execute(
@@ -25,46 +71,43 @@ async def supersede_trade_pairs(
                 .where(
                     SourceEvent.wallet == wallet,
                     SourceEvent.event_type == "TRADE",
-                    SourceEvent.dedup_key == key,
+                    SourceEvent.dedup_key.in_(keys),
                 )
                 .order_by(SourceEvent.api_order)
+                .execution_options(populate_existing=True)
             )
         )
         .scalars()
         .all()
     )
-    pairs = pair_enrichment(
-        [
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(row.dedup_key, []).append(
             {
-                "id": r.id,
-                "api_order": r.api_order,
-                "outcome_index": r.outcome_index,
-                "raw": r.raw,
-                "superseded_by": r.superseded_by,
+                "id": row.id,
+                "api_order": row.api_order,
+                "outcome_index": row.outcome_index,
+                "raw": row.raw,
+                "superseded_by": row.superseded_by,
             }
-            for r in rows
-        ]
-    )
+        )
+    pairs = {}
+    for group in grouped.values():
+        pairs.update(pair_enrichment(group))
     if pairs:
         for row in rows:
             if row.id in pairs:
                 row.superseded_by = pairs[row.id]
-        projected = await session.scalar(
-            select(func.count())
-            .select_from(PositionLedger)
-            .where(
-                PositionLedger.wallet == wallet,
-                PositionLedger.source_event_id.in_(
-                    [r.source_event_id for r in rows if r.id in pairs]
-                ),
-            )
-        )
-        if projected:
-            await session.execute(
-                update(WalletTotal)
-                .where(WalletTotal.wallet == wallet)
-                .values(recompute_needed=True)
-            )
+        cursor = await session.get(ProjectorCursor, wallet, populate_existing=True)
+        if cursor and any(
+            row.id in pairs and row.api_order <= cursor.last_applied_api_order for row in rows
+        ):
+            affected_ids = set(pairs) | set(pairs.values())
+            for row in rows:
+                if row.id in affected_ids:
+                    await mark_condition_dirty(
+                        session, total, row.condition_id, (row.event_time, row.api_order)
+                    )
         await session.flush()
         if monitor_events is not None:
             for row in rows:
@@ -73,7 +116,7 @@ async def supersede_trade_pairs(
                         {
                             "wallet": wallet,
                             "token_id": row.token_id,
-                            "dedup_key": key,
+                            "dedup_key": row.dedup_key,
                             "source_event_id": row.source_event_id,
                             "superseded_id": row.id,
                             "survivor_id": pairs[row.id],
@@ -102,10 +145,17 @@ async def get_or_create_cursor_locked(
     If the cursor does not exist, insert an initial row and lock it.
     """
     w = wallet.lower()
+    await configure_transaction(session)
+    # Cursor rows are source-specific, but event order is shared across sources.
+    # Serialize cursor creation and order allocation across the entire wallet.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:wallet, 1))"), {"wallet": w}
+    )
     stmt = (
         select(IngestionCursor)
         .where(IngestionCursor.wallet == w, IngestionCursor.source == source)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     res = await session.execute(stmt)
     cursor = res.scalar_one_or_none()
@@ -218,16 +268,25 @@ async def write_event_batch(
     Uses INSERT ... ON CONFLICT (wallet, source_event_id) DO NOTHING RETURNING id.
     Updates ingestion_cursors in the SAME transaction.
 
-    Assumes one writer per wallet; the wallet/order unique constraint makes
-    concurrent cross-source allocation collisions fail loudly.
+    Serializes all sources for a wallet for the duration of the transaction.
 
     Returns (inserted_count, duplicate_count).
     """
     w = wallet.lower()
+    for raw_event, _ in events_with_ids:
+        for field in ("proxy_wallet", "wallet"):
+            claimed = raw_event.get(field)
+            if claimed and str(claimed).strip().lower() != w:
+                raise ValueError("Source event wallet does not match the target wallet")
     observed_now = now or datetime.now(timezone.utc)
 
     # 1. Acquire per-wallet row lock on ingestion_cursors
     cursor = await get_or_create_cursor_locked(session, w, source)
+    # The projector and writer must agree on whether a correction has already
+    # been applied before either transaction changes wallet accounting state.
+    from app.accounting.projector import AccountingProjector
+
+    wallet_total = await AccountingProjector().get_or_create_wallet_total(session, w)
 
     if not events_with_ids:
         # No events to write, but update cursor state if needed
@@ -244,12 +303,14 @@ async def write_event_batch(
 
     # 2. Check which source_event_ids already exist in source_events
     all_ids = [eid for _, eid in events_with_ids]
-    existing_stmt = select(SourceEvent.source_event_id).where(
-        SourceEvent.wallet == w,
-        SourceEvent.source_event_id.in_(all_ids),
-    )
-    existing_res = await session.execute(existing_stmt)
-    existing_set = set(existing_res.scalars().all())
+    existing_set = set()
+    for offset in range(0, len(all_ids), INSERT_BATCH_SIZE):
+        existing_stmt = select(SourceEvent.source_event_id).where(
+            SourceEvent.wallet == w,
+            SourceEvent.source_event_id.in_(all_ids[offset : offset + INSERT_BATCH_SIZE]),
+        )
+        existing_res = await session.execute(existing_stmt)
+        existing_set.update(existing_res.scalars().all())
 
     # 3. Assign monotonic api_order to new events and prepare insert rows
     max_order, wallet_latest_time = (
@@ -271,7 +332,7 @@ async def write_event_batch(
         # Determine if late
         ts = int(raw_ev.get("timestamp") or 0)
         ev_time = datetime.fromtimestamp(ts, tz=timezone.utc)
-        is_late = bool(last_known_event_time is not None and ev_time < last_known_event_time)
+        is_late = bool(max_event_time_in_batch is not None and ev_time < max_event_time_in_batch)
 
         if max_event_time_in_batch is None or ev_time > max_event_time_in_batch:
             max_event_time_in_batch = ev_time
@@ -298,27 +359,41 @@ async def write_event_batch(
         insert_rows.append(row)
 
     # 4. Execute batch insert with ON CONFLICT DO NOTHING RETURNING id
-    insert_stmt = (
-        insert(SourceEvent)
-        .values(insert_rows)
-        .on_conflict_do_nothing(index_elements=["wallet", "source_event_id"])
-        .returning(SourceEvent.source_event_id)
-    )
-    result = await session.execute(insert_stmt) if insert_rows else None
-    inserted_ids = result.scalars().all() if result is not None else []
+    threshold = get_settings().ingestion_copy_threshold
+    if insert_rows and threshold and len(insert_rows) >= threshold:
+        inserted_ids = await _copy_insert_events(session, insert_rows)
+    else:
+        inserted_ids = []
+        for offset in range(0, len(insert_rows), INSERT_BATCH_SIZE):
+            insert_stmt = (
+                insert(SourceEvent)
+                .values(insert_rows[offset : offset + INSERT_BATCH_SIZE])
+                .on_conflict_do_nothing(index_elements=["wallet", "source_event_id"])
+                .returning(SourceEvent.source_event_id)
+            )
+            result = await session.execute(insert_stmt)
+            inserted_ids.extend(result.scalars().all())
     inserted_count = len(inserted_ids)
     duplicate_count = len(events_with_ids) - inserted_count
     inserted_set = set(inserted_ids)
-    for key in {
-        row["dedup_key"]
-        for row in insert_rows
-        if row["event_type"] == "TRADE" and row["source_event_id"] in inserted_set
-    }:
-        await supersede_trade_pairs(session, w, key, monitor_events)
-    if any(row["is_late"] and row["source_event_id"] in inserted_set for row in insert_rows):
-        await session.execute(
-            update(WalletTotal).where(WalletTotal.wallet == w).values(recompute_needed=True)
-        )
+    trade_keys = list(
+        {
+            row["dedup_key"]
+            for row in insert_rows
+            if row["event_type"] == "TRADE" and row["source_event_id"] in inserted_set
+        }
+    )
+    for offset in range(0, len(trade_keys), INSERT_BATCH_SIZE):
+        keys = trade_keys[offset : offset + INSERT_BATCH_SIZE]
+        await _supersede_trade_keys(session, w, set(keys), monitor_events)
+    dirty_conditions = {}
+    for row in insert_rows:
+        if row["is_late"] and row["source_event_id"] in inserted_set:
+            condition = row["condition_id"]
+            boundary = (row["event_time"], row["api_order"])
+            dirty_conditions[condition] = min(dirty_conditions.get(condition, boundary), boundary)
+    for condition, boundary in dirty_conditions.items():
+        await mark_condition_dirty(session, wallet_total, condition, boundary)
 
     # 5. Update ingestion_cursors in the SAME transaction
     cursor.last_api_order = current_order

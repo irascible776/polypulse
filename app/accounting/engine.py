@@ -1,4 +1,6 @@
 import decimal
+from dataclasses import replace
+from datetime import datetime
 from decimal import Decimal
 
 from app.accounting.types import (
@@ -6,6 +8,7 @@ from app.accounting.types import (
     ApplyReject,
     ApplyResult,
     ApplySuccess,
+    ConditionEffect,
     PositionState,
 )
 
@@ -13,6 +16,113 @@ from app.accounting.types import (
 decimal.getcontext().prec = 28
 
 ZERO = Decimal("0")
+
+
+def resolve_redeem_token(
+    condition_id: str,
+    outcome_index: int | None,
+    positions: dict[tuple[str, str], PositionState],
+) -> tuple[str | None, str | None]:
+    """Resolve a tokenless redemption from the condition's open positions."""
+    matching_tokens = [
+        token_id
+        for (position_condition, token_id), state in positions.items()
+        if position_condition == condition_id
+        and (outcome_index is None or state.outcome_index == outcome_index)
+        and state.shares > ZERO
+    ]
+    if len(matching_tokens) == 1:
+        return matching_tokens[0], None
+    if matching_tokens:
+        return None, "AMBIGUOUS_REDEEM_TOKEN"
+    return None, "UNMATCHED_REDEEM_TOKEN"
+
+
+def advance_position(
+    prior: PositionState | None,
+    event: AccountingEvent,
+    result: ApplySuccess,
+    updated_at: datetime,
+) -> PositionState:
+    """Build the next position state without database access."""
+    prior_realized = prior.realized_pnl if prior else ZERO
+    outcome_index = event.outcome_index
+    if outcome_index is None and prior:
+        outcome_index = prior.outcome_index
+    return PositionState(
+        wallet=event.wallet,
+        condition_id=event.condition_id or "",
+        token_id=event.token_id,
+        outcome_index=outcome_index,
+        shares=result.shares_after,
+        avg_cost_basis=result.avg_cost_after,
+        realized_pnl=prior_realized + result.realized_pnl_delta,
+        last_applied_api_order=event.api_order,
+        updated_at=updated_at,
+    )
+
+
+def compute_position_event(
+    event: AccountingEvent,
+    positions: dict[tuple[str, str], PositionState],
+    updated_at: datetime,
+) -> tuple[AccountingEvent, ApplyResult, PositionState | None]:
+    """Compute one event from position state without accessing the database."""
+    condition_id = event.condition_id or ""
+    token_id = event.token_id
+    if not token_id and event.event_type.upper() == "REDEEM":
+        token_id, reason = resolve_redeem_token(condition_id, event.outcome_index, positions)
+        if reason is not None:
+            return (
+                event,
+                ApplyResult(
+                    reject=ApplyReject(
+                        wallet=event.wallet,
+                        condition_id=event.condition_id,
+                        token_id=event.token_id,
+                        size=event.size,
+                        usdc_size=event.usdc_size,
+                        reject_reason=reason,
+                    )
+                ),
+                None,
+            )
+    resolved = replace(event, condition_id=condition_id, token_id=token_id)
+    prior = positions.get((condition_id, token_id))
+    result = apply_event(prior, resolved)
+    state = (
+        advance_position(prior, resolved, result.success, updated_at) if result.success else None
+    )
+    return resolved, result, state
+
+
+def compute_condition_events(
+    wallet: str,
+    condition_id: str,
+    events: list[AccountingEvent],
+    positions: dict[tuple[str, str], PositionState],
+    updated_at: datetime,
+) -> list[ConditionEffect]:
+    """Compute ordered effects for one condition without database access."""
+    if any(
+        event.wallet != wallet or (event.condition_id or "") != condition_id for event in events
+    ):
+        raise ValueError("Condition work contains an event for another wallet or condition")
+    if any(
+        position.wallet != wallet
+        or position.condition_id != condition_id
+        or key != (position.condition_id, position.token_id)
+        for key, position in positions.items()
+    ):
+        raise ValueError("Condition work contains a position for another wallet or condition")
+    state = dict(positions)
+    effects = []
+    for event in events:
+        resolved, result, position = compute_position_event(event, state, updated_at)
+        if position is not None:
+            state[(resolved.condition_id or "", resolved.token_id)] = position
+        effects.append(ConditionEffect(resolved, result, position))
+    return effects
 
 
 def apply_event(

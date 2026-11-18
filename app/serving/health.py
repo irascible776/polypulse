@@ -11,7 +11,12 @@ from app.chain.rpc import PolygonRpcClient
 from app.config import get_settings
 from app.ingestion.status import ingestion_freshness
 from app.serving.time_format import utc_timestamp
-from app.storage.database import async_session_factory, engine
+from app.storage.database import (
+    async_session_factory,
+    engine,
+    secondary_session_factory,
+    validate_shard_identity,
+)
 from app.storage.models import ChainEvent, IngestionCursor, ReconcileRun, TrackedWallet
 
 _rpc: dict[str, Any] = {"block_number": None, "latency_ms": None, "error": None}
@@ -56,6 +61,7 @@ async def get_health() -> dict[str, Any]:
     pool = engine.pool
     result: dict[str, Any] = {
         "status": "ok",
+        "instance_id": get_settings().resolve_instance_id(),
         "db_pool": {
             "size": pool.size(),
             "checked_out": pool.checkedout(),
@@ -65,48 +71,65 @@ async def get_health() -> dict[str, Any]:
         "latest_chain_block": None,
         "wallets": {},
     }
-    try:
-        async with async_session_factory() as session:
-            result["latest_chain_block"] = await session.scalar(
-                select(ChainEvent.block_number).order_by(desc(ChainEvent.block_number)).limit(1)
-            )
-            wallets = (
-                (
-                    await session.execute(
-                        select(TrackedWallet).where(TrackedWallet.status == "active")
+    factories = [async_session_factory]
+    if secondary_session_factory is not None:
+        factories.append(secondary_session_factory)
+    available = 0
+    result["shards"] = {}
+    for shard, factory in enumerate(factories):
+        try:
+            async with factory() as session:
+                if secondary_session_factory is not None:
+                    await validate_shard_identity(session, shard)
+                latest = await session.scalar(
+                    select(ChainEvent.block_number).order_by(desc(ChainEvent.block_number)).limit(1)
+                )
+                if latest is not None:
+                    result["latest_chain_block"] = max(
+                        result["latest_chain_block"] or latest, latest
                     )
+                wallets = (
+                    (
+                        await session.execute(
+                            select(TrackedWallet).where(TrackedWallet.status == "active")
+                        )
+                    )
+                    .scalars()
+                    .all()
                 )
-                .scalars()
-                .all()
-            )
-            now = datetime.now(timezone.utc)
-            for wallet in wallets:
-                cursor = await session.get(IngestionCursor, (wallet.address, "data_api"))
-                freshness = ingestion_freshness(cursor.last_success_at if cursor else None)
-                run = await session.scalar(
-                    select(ReconcileRun)
-                    .where(ReconcileRun.wallet == wallet.address)
-                    .order_by(desc(ReconcileRun.finished_at), desc(ReconcileRun.id))
-                    .limit(1)
-                )
-                entry = {**freshness, "reconcile": None}
-                if run:
-                    entry["reconcile"] = {
-                        "match_count": run.match_count,
-                        "mismatch_count": run.mismatch_count,
-                        "in_flight_count": run.in_flight_count,
-                        "unknown_count": run.unknown_count,
-                        "reference_block": run.reference_block,
-                        "reference_time": utc_timestamp(run.reference_time),
-                        "finished_at": utc_timestamp(run.finished_at),
-                        "age_seconds": max(0.0, (now - run.finished_at).total_seconds()),
-                        "error": run.error,
-                    }
-                entry["status"] = health_status(freshness["ingestion_stale"], run, now)
-                if entry["status"] != "ok":
-                    result["status"] = "degraded"
-                result["wallets"][wallet.address] = entry
-    except Exception as exc:
+                now = datetime.now(timezone.utc)
+                for wallet in wallets:
+                    cursor = await session.get(IngestionCursor, (wallet.address, "data_api"))
+                    freshness = ingestion_freshness(cursor.last_success_at if cursor else None)
+                    run = await session.scalar(
+                        select(ReconcileRun)
+                        .where(ReconcileRun.wallet == wallet.address)
+                        .order_by(desc(ReconcileRun.finished_at), desc(ReconcileRun.id))
+                        .limit(1)
+                    )
+                    entry = {**freshness, "reconcile": None}
+                    if run:
+                        entry["reconcile"] = {
+                            "match_count": run.match_count,
+                            "mismatch_count": run.mismatch_count,
+                            "in_flight_count": run.in_flight_count,
+                            "unknown_count": run.unknown_count,
+                            "reference_block": run.reference_block,
+                            "reference_time": utc_timestamp(run.reference_time),
+                            "finished_at": utc_timestamp(run.finished_at),
+                            "age_seconds": max(0.0, (now - run.finished_at).total_seconds()),
+                            "error": run.error,
+                        }
+                    entry["status"] = health_status(freshness["ingestion_stale"], run, now)
+                    if entry["status"] != "ok":
+                        result["status"] = "degraded"
+                    result["wallets"][wallet.address] = entry
+                available += 1
+                result["shards"][str(shard)] = {"status": "available"}
+        except Exception as exc:
+            result["status"] = "degraded"
+            result["shards"][str(shard)] = {"status": "unavailable", "error": type(exc).__name__}
+            result["error"] = f"{type(exc).__name__}: {exc}"
+    if not available:
         result["status"] = "down"
-        result["error"] = f"{type(exc).__name__}: {exc}"
     return result

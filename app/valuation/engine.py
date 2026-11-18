@@ -47,6 +47,10 @@ class PositionValuation:
     ask: Decimal | None = None
     outcome: str | None = None
     price_time_known: bool = True
+    market_question: str | None = None
+    category: str | None = None
+    exposure_weight_pct: Decimal | None = None
+    position_roi_pct: Decimal | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +78,14 @@ class PositionValuation:
             "bid": str(self.bid) if self.bid is not None else None,
             "ask": str(self.ask) if self.ask is not None else None,
             "outcome": self.outcome,
+            "market_question": self.market_question,
+            "category": self.category,
+            "exposure_weight_pct": (
+                str(self.exposure_weight_pct) if self.exposure_weight_pct is not None else None
+            ),
+            "position_roi_pct": (
+                str(self.position_roi_pct) if self.position_roi_pct is not None else None
+            ),
         }
 
 
@@ -168,7 +180,12 @@ class ValuationEngine:
         """
         clean_wallet = wallet.lower()
 
-        if as_of is None and os.environ.get("VALUATION_CACHE_DISABLED") == "1":
+        if as_of is None and (
+            os.environ.get("VALUATION_CACHE_DISABLED") == "1"
+            or session.info.get("accounting_snapshot")
+        ):
+            # A process-wide cached summary may come from a newer/older transaction
+            # than the freshness and revision read by this request.
             return await self._value_live_wallet(session, clean_wallet)
         if as_of is None:
             # Check micro-cache
@@ -229,6 +246,11 @@ class ValuationEngine:
             if quote.is_stale:
                 stale_count += 1
 
+            roi_pct = (
+                ((unrealized / cost_total) * Decimal("100")).quantize(Decimal("0.01"))
+                if unrealized is not None and cost_total > 0
+                else None
+            )
             pv = PositionValuation(
                 wallet=wallet,
                 token_id=pos.token_id,
@@ -250,9 +272,29 @@ class ValuationEngine:
                 ask=quote.ask,
                 outcome=quote.outcome,
                 price_time_known=quote.price_time_known,
+                market_question=quote.market_question,
+                category=quote.category,
+                position_roi_pct=roi_pct,
             )
             valuations.append(pv)
             tot_cost += cost_total
+
+        if tot_mkt_val > 0:
+            valuations = [
+                PositionValuation(
+                    **{
+                        **pv.__dict__,
+                        "exposure_weight_pct": (
+                            ((pv.market_value / tot_mkt_val) * Decimal("100")).quantize(
+                                Decimal("0.01")
+                            )
+                            if pv.market_value is not None
+                            else None
+                        ),
+                    }
+                )
+                for pv in valuations
+            ]
 
         return WalletPnLSummary(
             wallet=wallet,
@@ -347,6 +389,11 @@ class ValuationEngine:
             if quote.is_stale:
                 stale_count += 1
 
+            roi_pct = (
+                ((unrealized / cost_total) * Decimal("100")).quantize(Decimal("0.01"))
+                if unrealized is not None and cost_total > 0
+                else None
+            )
             pv = PositionValuation(
                 wallet=wallet,
                 token_id=tok,
@@ -368,9 +415,29 @@ class ValuationEngine:
                 ask=quote.ask,
                 outcome=quote.outcome,
                 price_time_known=quote.price_time_known,
+                market_question=quote.market_question,
+                category=quote.category,
+                position_roi_pct=roi_pct,
             )
             valuations.append(pv)
             tot_cost += cost_total
+
+        if tot_mkt_val > 0:
+            valuations = [
+                PositionValuation(
+                    **{
+                        **pv.__dict__,
+                        "exposure_weight_pct": (
+                            ((pv.market_value / tot_mkt_val) * Decimal("100")).quantize(
+                                Decimal("0.01")
+                            )
+                            if pv.market_value is not None
+                            else None
+                        ),
+                    }
+                )
+                for pv in valuations
+            ]
 
         return WalletPnLSummary(
             wallet=wallet,

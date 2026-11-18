@@ -23,17 +23,32 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select, text, union_all
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chain.rpc import PolygonRpcClient
 from app.config import get_settings
 from app.ingestion.status import ingestion_freshness
+from app.serving.analytics import (
+    get_system_metrics,
+    get_wallet_analytics,
+    get_wallets_leaderboard,
+)
+from app.serving.fleet import get_fleet_status
 from app.serving.middleware import global_latency_tracker
 from app.serving.time_format import utc_timestamp
 from app.serving.websocket import ws_manager
-from app.storage.database import async_session_factory, check_database_connection
+from app.storage.database import (
+    async_session_factory,
+    check_database_connection,
+    market_session,
+    secondary_session_factory,
+    validate_shard_identity,
+    wallet_read_session,
+)
 from app.storage.models import (
+    ArchivedMarketPrice,
     ChainEvent,
     IngestionCursor,
     MarketPrice,
@@ -42,6 +57,7 @@ from app.storage.models import (
     PositionLedger,
     SourceEvent,
     TrackedWallet,
+    WalletTotal,
 )
 from app.valuation.engine import ValuationEngine
 from app.valuation.pricing import PriceResolver, PriceTier
@@ -54,60 +70,107 @@ price_resolver = PriceResolver()
 
 
 async def get_db_session() -> AsyncSession:
-    async with async_session_factory() as session:
-        yield session
+    try:
+        async with async_session_factory() as session:
+            if secondary_session_factory is not None:
+                await validate_shard_identity(session, 0)
+            yield session
+    except (SQLAlchemyError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Market database unavailable") from exc
+
+
+async def get_wallet_db_session(address: str) -> AsyncSession:
+    try:
+        async with wallet_read_session(address) as session:
+            yield session
+    except (SQLAlchemyError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Wallet database unavailable") from exc
 
 
 async def wallet_freshness(session: AsyncSession, wallet: str) -> dict[str, Any]:
     cursor = await session.get(IngestionCursor, (wallet.lower(), "data_api"))
     freshness = ingestion_freshness(cursor.last_success_at if cursor else None)
-    valid_tick = or_(
-        and_(MarketPrice.source == "last_trade", MarketPrice.price.between(0, 1)),
-        and_(
-            MarketPrice.source == "live_quote",
-            MarketPrice.bid >= 0,
-            MarketPrice.ask <= 1,
-            MarketPrice.bid <= MarketPrice.ask,
-            MarketPrice.ask - MarketPrice.bid <= get_settings().max_spread,
-            or_(
-                MarketResolution.condition_id.is_(None), MarketResolution.gamma_closed.is_not(True)
-            ),
-        ),
-    )
-    per_token = (
-        select(MarketPrice.token_id, func.max(MarketPrice.observed_at).label("tick_time"))
-        .join(Position, Position.token_id == MarketPrice.token_id)
-        .outerjoin(MarketResolution, MarketResolution.condition_id == Position.condition_id)
-        .where(
-            Position.wallet == wallet.lower(),
-            Position.shares > 0,
-            MarketPrice.observed_at <= datetime.now(timezone.utc),
-            valid_tick,
+    total = await session.get(WalletTotal, wallet.lower())
+    latest_order = await session.scalar(
+        select(func.max(SourceEvent.api_order)).where(
+            SourceEvent.wallet == wallet.lower(), SourceEvent.superseded_by.is_(None)
         )
-        .group_by(MarketPrice.token_id)
-        .subquery()
     )
-    newest, oldest = (
+    applied_order = total.last_applied_api_order if total else 0
+    freshness.update(
+        accounting_applied_order=applied_order,
+        accounting_revision=total.publication_revision if total else 0,
+        accounting_current=not (total and total.recompute_needed)
+        and (latest_order is None or latest_order <= applied_order),
+    )
+    positions = (
         await session.execute(
-            select(func.max(per_token.c.tick_time), func.min(per_token.c.tick_time))
+            select(Position.token_id, Position.condition_id).where(
+                Position.wallet == wallet.lower(), Position.shares > 0
+            )
         )
-    ).one()
+    ).all()
+    async with market_session(session) as market_db:
+        resolutions = (
+            (
+                await market_db.execute(
+                    select(MarketResolution).where(
+                        MarketResolution.condition_id.in_({condition for _, condition in positions})
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        states = {record.condition_id: record for record in resolutions}
+        open_tokens = {
+            token
+            for token, condition in positions
+            if condition not in states or states[condition].gamma_closed is not True
+        }
+        closed_tokens = {token for token, _ in positions} - open_tokens
+        tick_queries = []
+        for model in (MarketPrice, ArchivedMarketPrice):
+            valid_tick = or_(
+                and_(model.source == "last_trade", model.price.between(0, 1)),
+                and_(
+                    model.source == "live_quote",
+                    model.bid >= 0,
+                    model.ask <= 1,
+                    model.bid <= model.ask,
+                    model.ask - model.bid <= get_settings().max_spread,
+                    model.token_id.not_in(closed_tokens),
+                ),
+            )
+            tick_queries.append(
+                select(model.token_id, model.observed_at).where(
+                    model.token_id.in_({token for token, _ in positions}),
+                    model.observed_at <= datetime.now(timezone.utc),
+                    valid_tick,
+                )
+            )
+        ticks = union_all(*tick_queries).subquery()
+        per_token = (
+            select(ticks.c.token_id, func.max(ticks.c.observed_at).label("tick_time"))
+            .group_by(ticks.c.token_id)
+            .subquery()
+        )
+        newest, oldest = (
+            await market_db.execute(
+                select(func.max(per_token.c.tick_time), func.min(per_token.c.tick_time))
+            )
+        ).one()
     freshness.update(
         prices_as_of=utc_timestamp(newest),
         oldest_tick_age_seconds=max(0.0, (datetime.now(timezone.utc) - oldest).total_seconds())
         if oldest
         else None,
     )
-    condition_rows = (
-        await session.execute(
-            select(MarketResolution.checked_at, MarketResolution.resolved)
-            .select_from(Position)
-            .outerjoin(MarketResolution, MarketResolution.condition_id == Position.condition_id)
-            .where(Position.wallet == wallet.lower(), Position.shares > 0)
-            .distinct()
-        )
-    ).all()
-    unchecked = [checked for checked, resolved in condition_rows if resolved is not True]
+    unchecked = [
+        states[condition].checked_at if condition in states else None
+        for _, condition in positions
+        if condition not in states or states[condition].resolved is not True
+    ]
     oldest_check = min((checked for checked in unchecked if checked is not None), default=None)
     missing_resolution = any(checked is None for checked in unchecked)
     resolution_stale = missing_resolution or (
@@ -147,6 +210,7 @@ async def serving_health(session: AsyncSession = Depends(get_db_session)) -> dic
 
     return {
         "status": "healthy" if db_connected else "unhealthy",
+        "instance_id": get_settings().resolve_instance_id(),
         "database_connected": db_connected,
         "last_chain_pull": {
             "block_number": latest_event[0] if latest_event else None,
@@ -161,13 +225,59 @@ async def serving_health(session: AsyncSession = Depends(get_db_session)) -> dic
     }
 
 
+@router.get("/fleet", status_code=status.HTTP_200_OK)
+async def fleet_status() -> dict[str, Any]:
+    """Return active/stale API & worker instances and live 16-bucket ownership map."""
+    try:
+        return await get_fleet_status()
+    except (SQLAlchemyError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Fleet status unavailable") from exc
+
+
+@router.get("/system/metrics", status_code=status.HTTP_200_OK)
+async def system_metrics() -> dict[str, Any]:
+    """Return rolling throughput, detection lag, API latency, partition stats, and benchmarks."""
+    try:
+        return await get_system_metrics()
+    except (SQLAlchemyError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="System metrics unavailable") from exc
+
+
+@router.get("/wallets", status_code=status.HTTP_200_OK)
+async def list_wallets(
+    window: str = Query("all", description="Time window: 7d, 30d, or all"),
+    min_volume: Decimal = Query(Decimal("0"), ge=Decimal("0")),
+) -> dict[str, Any]:
+    """Cross-shard tracked wallet leaderboard with honest PnL, exposure, win rate, and reconcile."""
+    if window not in {"7d", "30d", "all"}:
+        raise HTTPException(status_code=400, detail="window must be one of: 7d, 30d, all")
+    try:
+        return await get_wallets_leaderboard(
+            valuation_engine=valuation_engine, window=window, min_volume=min_volume
+        )
+    except (SQLAlchemyError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Wallet leaderboard unavailable") from exc
+
+
+@router.get("/wallets/{address}/analytics", status_code=status.HTTP_200_OK)
+async def wallet_analytics(
+    address: str,
+    window: str = Query("all", description="Time window: 7d, 30d, or all"),
+    session: AsyncSession = Depends(get_wallet_db_session),
+) -> dict[str, Any]:
+    """Return equity/drawdown curve, entry-price buckets, excluded flows, audit, and reconcile."""
+    if window not in {"7d", "30d", "all"}:
+        raise HTTPException(status_code=400, detail="window must be one of: 7d, 30d, all")
+    return await get_wallet_analytics(session=session, wallet=address, window=window)
+
+
 @router.get("/wallets/{address}/positions")
 async def get_wallet_positions(
     address: str,
     as_of: str | None = Query(
         None, description="ISO timestamp for historical point-in-time valuation"
     ),
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_wallet_db_session),
 ) -> dict[str, Any]:
     """
     Returns open positions with shares, cost basis, current mark price,
@@ -184,6 +294,7 @@ async def get_wallet_positions(
                 detail="Invalid ISO timestamp format for as_of parameter",
             )
 
+    valuation_engine.invalidate(clean_wallet)
     summary = await valuation_engine.value_wallet(session, clean_wallet, as_of=as_of_dt)
     freshness = await wallet_freshness(session, clean_wallet)
     return {
@@ -197,6 +308,7 @@ async def get_wallet_positions(
             summary.unpriced_positions_count
             or freshness["ingestion_stale"]
             or freshness["resolution_stale"]
+            or not freshness["accounting_current"]
         ),
         **freshness,
     }
@@ -208,7 +320,7 @@ async def get_wallet_pnl(
     as_of: str | None = Query(
         None, description="ISO timestamp for historical point-in-time valuation"
     ),
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_wallet_db_session),
 ) -> dict[str, Any]:
     """
     Returns realized + unrealized mark-to-market PnL summary.
@@ -225,12 +337,16 @@ async def get_wallet_pnl(
                 detail="Invalid ISO timestamp format for as_of parameter",
             )
 
+    valuation_engine.invalidate(clean_wallet)
     summary = await valuation_engine.value_wallet(session, clean_wallet, as_of=as_of_dt)
     result = summary.to_dict()
     result.pop("positions")
     result.update(await wallet_freshness(session, clean_wallet))
     result["valuation_current"] = (
-        result["complete"] and not result["ingestion_stale"] and not result["resolution_stale"]
+        result["complete"]
+        and not result["ingestion_stale"]
+        and not result["resolution_stale"]
+        and result["accounting_current"]
     )
     return result
 
@@ -240,14 +356,21 @@ async def get_wallet_trades(
     address: str,
     cursor: int | None = Query(None, description="Pagination cursor (api_order)"),
     limit: int = Query(50, ge=1, le=200),
-    session: AsyncSession = Depends(get_db_session),
+    session: AsyncSession = Depends(get_wallet_db_session),
 ) -> dict[str, Any]:
     """
     Returns paginated trade ledger events for a wallet.
     """
     clean_wallet = address.lower()
     stmt = (
-        select(PositionLedger)
+        select(PositionLedger, SourceEvent.transaction_hash)
+        .outerjoin(
+            SourceEvent,
+            and_(
+                SourceEvent.wallet == PositionLedger.wallet,
+                SourceEvent.source_event_id == PositionLedger.source_event_id,
+            ),
+        )
         .where(PositionLedger.wallet == clean_wallet)
         .order_by(desc(PositionLedger.api_order))
         .limit(limit + 1)
@@ -255,10 +378,10 @@ async def get_wallet_trades(
     if cursor is not None:
         stmt = stmt.where(PositionLedger.api_order < cursor)
 
-    entries = (await session.execute(stmt)).scalars().all()
+    entries = (await session.execute(stmt)).all()
     has_more = len(entries) > limit
     results = entries[:limit]
-    next_cursor = results[-1].api_order if has_more and results else None
+    next_cursor = results[-1][0].api_order if has_more and results else None
 
     return {
         "wallet": clean_wallet,
@@ -271,6 +394,7 @@ async def get_wallet_trades(
                 "event_time": utc_timestamp(t.event_time),
                 "condition_id": t.condition_id,
                 "token_id": t.token_id,
+                "transaction_hash": tx_hash,
                 "shares_delta": str(t.shares_delta),
                 "shares_after": str(t.shares_after),
                 "avg_cost_after": str(t.avg_cost_after),
@@ -278,7 +402,7 @@ async def get_wallet_trades(
                 "realized_pnl_delta": str(t.realized_pnl_delta),
                 "is_recompute": t.is_recompute,
             }
-            for t in results
+            for t, tx_hash in results
         ],
     }
 
@@ -312,6 +436,17 @@ async def get_market_price(
         .all()
     )
     ids.update(
+        (
+            await session.execute(
+                select(ArchivedMarketPrice.token_id).where(
+                    ArchivedMarketPrice.condition_id == condition_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    ids.update(
         token
         for token in (
             await session.execute(
@@ -322,6 +457,30 @@ async def get_market_price(
         .all()
         if token
     )
+    if secondary_session_factory is not None:
+        try:
+            async with secondary_session_factory() as other:
+                await validate_shard_identity(other, 1)
+                ids.update(
+                    (
+                        await other.execute(
+                            select(Position.token_id).where(Position.condition_id == condition_id)
+                        )
+                    ).scalars()
+                )
+                ids.update(
+                    token
+                    for token in (
+                        await other.execute(
+                            select(SourceEvent.token_id).where(
+                                SourceEvent.condition_id == condition_id
+                            )
+                        )
+                    ).scalars()
+                    if token
+                )
+        except SQLAlchemyError as exc:
+            raise HTTPException(status_code=503, detail="Market coverage incomplete") from exc
     state = await session.get(MarketResolution, condition_id)
     context = {}
     if state:
@@ -380,21 +539,35 @@ async def post_market_price(
     # Invalidate live valuation micro-cache on price tick injection
     valuation_engine.invalidate()
 
-    # Broadcast price update across affected wallets
-    # Query wallets holding this token
-    stmt = select(TrackedWallet.address).distinct()
-    wallets = (await session.execute(stmt)).scalars().all()
-    for w in wallets:
-        await ws_manager.broadcast_to_wallet(
-            wallet=w,
-            event_type="price_update",
-            payload={
-                "token_id": token_id,
-                "price": str(price),
-                "source": source,
-                "observed_at": utc_timestamp(tick.observed_at),
-            },
-        )
+    # Each API replica listens to the shard's notification channel.
+    factories = [async_session_factory]
+    if secondary_session_factory is not None:
+        factories.append(secondary_session_factory)
+    try:
+        for factory in factories:
+            async with factory() as notification_session:
+                async with notification_session.begin():
+                    wallets = (
+                        (
+                            await notification_session.execute(
+                                select(TrackedWallet.address).distinct()
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    for wallet in wallets:
+                        payload = json.dumps(
+                            {"type": "price_update", "wallet": wallet, "ref": str(tick.id)}
+                        )
+                        await notification_session.execute(
+                            text("SELECT pg_notify('polypulse_events', :payload)"),
+                            {"payload": payload},
+                        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="Price stored; notification incomplete"
+        ) from exc
 
     return {
         "success": True,
@@ -410,15 +583,22 @@ async def websocket_wallet_endpoint(websocket: WebSocket, address: str) -> None:
     """
     WebSocket endpoint streaming real-time PnL updates and new trades for a wallet.
     """
+    if not get_settings().is_origin_allowed(websocket.headers.get("origin")):
+        await websocket.close(code=4403)
+        return
     clean_wallet = address.lower()
     if not re.fullmatch(r"0x[0-9a-f]{40}", clean_wallet):
         await websocket.close(code=4403)
         return
-    async with async_session_factory() as session:
-        tracked = await session.get(TrackedWallet, clean_wallet)
-        if tracked is None or tracked.status != "active":
-            await websocket.close(code=4403)
-            return
+    try:
+        async with wallet_read_session(clean_wallet) as session:
+            tracked = await session.get(TrackedWallet, clean_wallet)
+            if tracked is None or tracked.status != "active":
+                await websocket.close(code=4403)
+                return
+    except (SQLAlchemyError, RuntimeError):
+        await websocket.close(code=1013)
+        return
     await ws_manager.connect(clean_wallet, websocket)
 
     try:

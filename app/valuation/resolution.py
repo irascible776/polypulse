@@ -86,12 +86,17 @@ async def check_resolution(condition_id: str) -> dict:
     }
 
 
-async def save_resolution(session: AsyncSession, record: dict) -> None:
+async def save_resolution(session: AsyncSession, record: dict) -> bool:
     """Upsert an observed resolution within the caller's transaction."""
     stmt = insert(MarketResolution).values(**record)
-    await session.execute(
+    result = await session.scalar(
         stmt.on_conflict_do_update(
             index_elements=[MarketResolution.condition_id],
             set_={key: value for key, value in record.items() if key != "condition_id"},
-        )
+            where=(
+                (stmt.excluded.checked_at >= MarketResolution.checked_at)
+                & (stmt.excluded.chain_block >= MarketResolution.chain_block)
+            ),
+        ).returning(MarketResolution.condition_id)
     )
+    return result is not None
